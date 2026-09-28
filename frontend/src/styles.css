@@ -1,0 +1,375 @@
+:root {
+  --comiku-bg: #fdf8f3;
+  --comiku-surface: #ffffff;
+  --comiku-border: #f0e4da;
+  --comiku-ink: #3a3230;
+  --comiku-ink-soft: #8a7c74;
+  --comiku-primary: #f0836a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--comiku-bg);
+  color: var(--comiku-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 动效尊重系统偏好；交互密集的编辑器页面应保持零动效。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+.nm-centered {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+/* ── 窄屏适配 ──────────────────────────────────────────────
+   内网工具以桌面为主，但手机上也要能用来看进度：核心是别让导航整个消失。 */
+
+.nm-header {
+  padding: 0 24px;
+  gap: 24px;
+}
+
+/* 状态 chips 在窄屏下横向滚动，而不是被截断成「待发…」。 */
+.nm-chips {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+  /* 移动端惯性滚动 */
+  -webkit-overflow-scrolling: touch;
+}
+
+.nm-chips::-webkit-scrollbar {
+  height: 4px;
+}
+
+@media (max-width: 720px) {
+  .nm-header {
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  /* 窄屏只留头像：名字占的位置比它提供的价值大。 */
+  .nm-username {
+    display: none;
+  }
+}
+
+/* ── 文件网格 ──────────────────────────────────────────────
+   固定宽度的缩略图格，自适应铺满一行。
+   用 auto-fill + minmax 而不是固定列数：作品有 6 页还是 60 页，
+   都不该出现「一页只有两列、右边空一大片」或者「缩略图挤成邮票」。 */
+
+.nm-file-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 12px;
+}
+
+.nm-file-card {
+  position: relative;
+  border: 1px solid var(--comiku-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--comiku-surface);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.nm-file-card:hover {
+  border-color: var(--comiku-primary);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 6%);
+}
+
+/* 选中态用边框 + 底色，而不是仅靠复选框的勾 —— 扫一眼整片网格时，
+   边框比一个小勾更容易辨认出「哪些被选中了」。 */
+.nm-file-card.is-selected {
+  border-color: var(--comiku-primary);
+  box-shadow: 0 0 0 2px rgb(240 131 106 / 25%);
+}
+
+.nm-file-thumb {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  background: var(--comiku-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.nm-file-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* 复选框常驻显示，不做 hover 才出现：触屏设备没有 hover，
+   而批量删除是这个页面最主要的操作之一。 */
+.nm-file-check {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 3px;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 85%);
+}
+
+.nm-file-meta {
+  padding: 6px 8px 8px;
+  min-width: 0;
+}
+
+.nm-file-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 88%);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+/* 「进入翻校」放在缩略图右下角：左上角是勾选框、右上角是改名/删除，
+   三个位置互不遮挡，鼠标扫过时不会点错。 */
+.nm-file-open {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  background: rgb(255 255 255 / 88%);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.nm-file-card:hover .nm-file-open,
+.nm-file-card:focus-within .nm-file-open {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .nm-file-open {
+    opacity: 1;
+  }
+}
+
+.nm-file-card:hover .nm-file-actions,
+.nm-file-card:focus-within .nm-file-actions {
+  opacity: 1;
+}
+
+/* 触屏设备上永远没有 hover，操作按钮必须常显。 */
+@media (hover: none) {
+  .nm-file-actions {
+    opacity: 1;
+    background: rgb(255 255 255 / 70%);
+  }
+}
+
+/* 暗色下这几处半透明白底会变成刺眼的亮块，换成深色底。 */
+[data-theme='dark'] .nm-file-check,
+[data-theme='dark'] .nm-file-actions {
+  background: rgb(38 33 31 / 88%);
+}
+
+/* ── 翻校工作台 ────────────────────────────────────────────
+   左图右字。画布吃掉所有剩余高度，右侧面板固定宽度且自己滚动 ——
+   这样翻页时两侧都不会跳。 */
+
+.nm-translate {
+  display: flex;
+  flex-direction: column;
+  /* 撑满视口减去顶部导航，画布才能真正「大」起来 */
+  height: calc(100vh - 92px);
+  gap: 10px;
+}
+
+.nm-translate-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--comiku-surface);
+  border: 1px solid var(--comiku-border);
+  flex: none;
+}
+
+.nm-translate-warn {
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  background: rgb(228 162 60 / 12%);
+  border: 1px solid rgb(228 162 60 / 35%);
+  flex: none;
+}
+
+.nm-translate-body {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.nm-translate-canvas {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.nm-translate-panel {
+  width: 380px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-radius: 12px;
+  border: 1px solid var(--comiku-border);
+  background: var(--comiku-surface);
+  overflow: hidden;
+}
+
+.nm-canvas-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 320px;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--comiku-border);
+}
+
+.nm-canvas-zoom {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  background: rgb(0 0 0 / 45%);
+}
+
+.nm-canvas-zoom button {
+  background: transparent;
+  border: none;
+  color: #f0e9e4;
+  font-size: 12px;
+  padding: 2px 8px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+
+.nm-canvas-zoom button:hover {
+  background: rgb(255 255 255 / 15%);
+}
+
+.nm-canvas-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: #f0e9e4;
+  font-size: 13px;
+  text-shadow: 0 1px 4px rgb(0 0 0 / 80%);
+}
+
+.nm-credits {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--comiku-border);
+  flex: none;
+  min-height: 42px;
+}
+
+.nm-source-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.nm-source-item {
+  border-radius: 10px;
+  border: 1px solid transparent;
+  padding: 8px;
+  margin-bottom: 8px;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.nm-source-item:hover {
+  background: rgb(240 131 106 / 5%);
+}
+
+.nm-source-item.is-selected {
+  border-color: var(--comiku-primary);
+  background: rgb(240 131 106 / 8%);
+}
+
+.nm-source-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.nm-source-origin {
+  padding: 0 0 4px;
+  font-size: 12px;
+  color: var(--comiku-ink-soft);
+}
+
+.nm-source-issues {
+  margin-top: 4px;
+  padding-left: 2px;
+}
+
+/* 窄屏：改成上下堆叠。画布固定一个高度，否则 flex 会把两边都压扁。 */
+@media (max-width: 900px) {
+  .nm-translate {
+    height: auto;
+  }
+
+  .nm-translate-body {
+    flex-direction: column;
+  }
+
+  .nm-translate-canvas {
+    height: 60vh;
+  }
+
+  .nm-translate-panel {
+    width: 100%;
+    max-height: 70vh;
+  }
+}

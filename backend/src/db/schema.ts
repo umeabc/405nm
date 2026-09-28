@@ -1,0 +1,770 @@
+import { sql } from 'drizzle-orm';
+import {
+  bigint,
+  bigserial,
+  boolean,
+  doublePrecision,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
+
+/**
+ * M0 只落地身份相关的两张表，用于跑通「登录」这条链路。
+ * 团队 / 角色 / 项目 / 文件 / 标号 / 翻译 / 台账 / 发布队列等在 M1 之后逐步补，
+ * 具体列设计见实施方案第六节。
+ *
+ * 全局约定：
+ *  - 主键 `uuid`，新建数据用 `gen_random_uuid()`；**迁移数据用确定性 uuidv5**
+ *    （`uuidv5(NS_405nm, 'moeflow:<collection>:<ObjectId>')`），使迁移天然幂等。
+ *  - `legacy_id` 记录来源系统的 id，仅作查询便利，不是正确性前提。
+ *  - 时间一律 `timestamptz`。
+ */
+
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    username: text('username').notNull().unique(),
+    displayName: text('display_name').notNull(),
+    passwordHash: text('password_hash').notNull(),
+    /** 预留算法升级位：今天是 scrypt，将来可平滑换 argon2id。 */
+    passwordAlgo: text('password_algo').notNull().default('scrypt'),
+    avatarKey: text('avatar_key'),
+    isSiteAdmin: boolean('is_site_admin').notNull().default(false),
+    /** active | disabled */
+    status: text('status').notNull().default('active'),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('users_legacy_id_idx').on(t.legacyId)],
+);
+
+/**
+ * 会话刻意用「数据库不透明令牌」而不是 JWT：改密码 / 移出团队 / 停用账号时
+ * 必须能**立即失效**，JWT 做不到这一点。
+ * 库里只存 token 的哈希，明文只在 Cookie 里。
+ */
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    tokenHash: text('token_hash').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    userAgent: text('user_agent'),
+    ip: text('ip'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('sessions_user_idx').on(t.userId)],
+);
+
+// ── 团队与权限 ──────────────────────────────────────────────
+//
+// 相对 moeflow 的三处刻意改造：
+//  1. 权限从角色上的 `List[int]` 枚举码，改成 `role_permissions` **关联表** —— 可查询、可审计。
+//  2. `TeamRole.convert_to_project_role()` 那套隐式提权，改成角色上的显式开关 `auto_project_admin`。
+//  3. 团队角色与项目角色合到一张 `roles` 表，用 `scope` 区分 —— 两者字段完全同构，
+//     分两张表只会让「查一个人的全部角色」变成两次查询。
+
+export const teams = pgTable(
+  'teams',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    name: text('name').notNull().unique(),
+    intro: text('intro').notNull().default(''),
+    avatarKey: text('avatar_key'),
+    /**
+     * 新成员入团时的默认角色。刻意**不加外键**：teams ↔ roles 互相引用，
+     * 加约束就得靠单独的手写迁移来打破循环，而这里的参照完整性风险很低。
+     */
+    defaultRoleId: uuid('default_role_id'),
+    maxMembers: integer('max_members'),
+    /**
+     * 作品编号（`projects.serial`）的分配器。用「团队行上的计数器」而不是
+     * `max(serial)+1`：后者在并发建作品时会撞号，而这里 `UPDATE ... RETURNING`
+     * 天然持有行锁，天然原子。作品编号是给人看的（#12），不能有重号。
+     */
+    projectSeq: integer('project_seq').notNull().default(0),
+    /** active | archived */
+    status: text('status').notNull().default('active'),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('teams_legacy_id_idx').on(t.legacyId)],
+);
+
+/**
+ * 角色表只装**团队作用域**的两种角色：
+ *  - `scope='team'`：团队成员角色（创建人/管理员/…）。
+ *  - `scope='project'`：项目角色的**模板**，供新建项目时批量实例化。
+ *
+ * 为什么项目角色要另立一张 `project_roles` 而不是复用本表的 `project_id` 列：
+ * 复用的话「同一团队下不同项目可以有同名角色」要靠 `(scope, team_id, project_id, name)`
+ * 上的 `UNIQUE NULLS NOT DISTINCT` 才成立 —— 因为团队角色的 project_id 是 NULL，
+ * 而 PG 默认视 NULL 互不相等，普通唯一索引在 NULL 上等于不生效。
+ * 两处 NULL 语义纠缠在一起，是很容易埋雷的写法；分开两张表后，
+ * 两张表的唯一键都**不含 NULL 列**，约束语义一目了然。
+ *
+ * `projectId` 这一列在 M1 曾是占位，从未被写入过，M2 的迁移里删掉。
+ */
+export const roles = pgTable(
+  'roles',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    /** team | project（project 表示「项目角色模板」） */
+    scope: text('scope').notNull(),
+    /** 两种 scope 下都非空：模板也属于某个团队 */
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** 等级：越高权限越大。守卫规则是「只能改动等级严格低于自己的成员」。 */
+    level: integer('level').notNull(),
+    intro: text('intro').notNull().default(''),
+    /** 系统内置角色不可删除 */
+    isSystem: boolean('is_system').notNull().default(false),
+    systemCode: text('system_code'),
+    /** 持有该团队角色的人是否自动成为项目管理员（替代 moeflow 的继承魔法） */
+    autoProjectAdmin: boolean('auto_project_admin').notNull().default(false),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('roles_team_idx').on(t.teamId),
+    // scope + teamId 都非空，这条约束真正生效。
+    uniqueIndex('roles_scope_team_name_uq').on(t.scope, t.teamId, t.name),
+  ],
+);
+
+/** 权限码目录。角色与权限是多对多，权限码本身是受控词表。 */
+export const permissions = pgTable('permissions', {
+  code: text('code').primaryKey(),
+  /** team | project */
+  scope: text('scope').notNull(),
+  label: text('label').notNull(),
+  intro: text('intro').notNull().default(''),
+});
+
+export const rolePermissions = pgTable(
+  'role_permissions',
+  {
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => roles.id, { onDelete: 'cascade' }),
+    permissionCode: text('permission_code')
+      .notNull()
+      .references(() => permissions.code, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.roleId, t.permissionCode] })],
+);
+
+export const teamMembers = pgTable(
+  'team_members',
+  {
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    roleId: uuid('role_id')
+      .notNull()
+      .references(() => roles.id, { onDelete: 'restrict' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.teamId, t.userId] }),
+    index('team_members_user_idx').on(t.userId),
+  ],
+);
+
+// ── 作品集 / 作品 / 项目角色 ────────────────────────────────
+//
+// 命名对照（彩翻 → 405nm → 界面）：
+//   ProjectSet → project_sets → 作品集
+//   Project    → projects     → 作品
+//   ProjectRole→ project_roles→ 作品内的角色（创建人/监理/校对/翻译/嵌字…）
+//
+// 与 moeflow 的两处结构差异：
+//  1. moeflow 的 `Target`（项目×语言）在这里叫 `targets`，只登记语言与展示名，
+//     **不存计数器** —— 计数器照搬会带进漂移值，一律按需聚合或重算。
+//  2. 作品状态分两层：`status` 是生命周期（active/archived，人工可改），
+//     「进度到哪一环」则由 `files.state` 聚合**派生**，不落库成可改字段 ——
+//     否则同一件事有两处记录，迟早不一致。
+
+export const projectSets = pgTable(
+  'project_sets',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    intro: text('intro').notNull().default(''),
+    /** 末尾排序，小在前 */
+    orderIndex: integer('order_index').notNull().default(0),
+    /** 封面图。刻意不加外键：projects/files 之间本来就互相引用，见 teams.defaultRoleId 的同款说明。 */
+    coverFileId: uuid('cover_file_id'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('project_sets_team_name_uq').on(t.teamId, t.name),
+    index('project_sets_team_idx').on(t.teamId),
+  ],
+);
+
+export const projects = pgTable(
+  'projects',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    /** 未归类时为 NULL */
+    setId: uuid('set_id').references(() => projectSets.id, { onDelete: 'set null' }),
+    /** 团队内自增的作品编号，界面上显示成 `#12`；由 teams.project_seq 原子分配 */
+    serial: integer('serial').notNull(),
+    name: text('name').notNull(),
+    intro: text('intro').notNull().default(''),
+    /** 原作者 / 出处，署名行要用 */
+    author: text('author').notNull().default(''),
+    /** 源语言（作品原文语种），如 ja / en / zh-CN */
+    sourceLanguage: text('source_language').notNull().default('ja'),
+    coverFileId: uuid('cover_file_id'),
+    /** active | archived（结项后归档，仍可查，但不再出现在默认视图） */
+    status: text('status').notNull().default('active'),
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('projects_team_serial_uq').on(t.teamId, t.serial),
+    index('projects_team_idx').on(t.teamId),
+    index('projects_set_idx').on(t.setId),
+    index('projects_status_idx').on(t.teamId, t.status),
+  ],
+);
+
+/**
+ * 作品内的角色。建作品时从团队的项目角色模板**复制**一份，
+ * 之后每个作品可以独立调整 —— 与 moeflow 的 `project_role` 集合一一对应。
+ * 复制而不是引用模板，是为了「某个作品临时加一个岗位」不必污染全团队。
+ */
+export const projectRoles = pgTable(
+  'project_roles',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** 反范式：权限查询要按团队取，少一次 join */
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    level: integer('level').notNull(),
+    intro: text('intro').notNull().default(''),
+    isSystem: boolean('is_system').notNull().default(false),
+    systemCode: text('system_code'),
+    /** 来源模板，仅作追溯；模板改了不会回灌到已有作品 */
+    sourceTemplateId: uuid('source_template_id'),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('project_roles_project_name_uq').on(t.projectId, t.name),
+    index('project_roles_project_idx').on(t.projectId),
+  ],
+);
+
+export const projectRolePermissions = pgTable(
+  'project_role_permissions',
+  {
+    projectRoleId: uuid('project_role_id')
+      .notNull()
+      .references(() => projectRoles.id, { onDelete: 'cascade' }),
+    permissionCode: text('permission_code')
+      .notNull()
+      .references(() => permissions.code, { onDelete: 'cascade' }),
+  },
+  (t) => [primaryKey({ columns: [t.projectRoleId, t.permissionCode] })],
+);
+
+export const projectMembers = pgTable(
+  'project_members',
+  {
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    projectRoleId: uuid('project_role_id')
+      .notNull()
+      .references(() => projectRoles.id, { onDelete: 'restrict' }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.projectId, t.userId] }),
+    index('project_members_user_idx').on(t.userId),
+  ],
+);
+
+/** 作品的目标语言。承接 moeflow 的 `Target`：只登记「这个作品要出哪些语言」。 */
+export const targets = pgTable(
+  'targets',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** 语言码，如 zh-CN */
+    language: text('language').notNull(),
+    /** 展示名，如「简体中文」 */
+    label: text('label').notNull(),
+    orderIndex: integer('order_index').notNull().default(0),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('targets_project_language_uq').on(t.projectId, t.language),
+    index('targets_project_idx').on(t.projectId),
+  ],
+);
+
+// ── 文件（图片）──────────────────────────────────────────────
+
+/**
+ * 一张图一行。要点：
+ *  - `team_id` 是**反范式**的冗余列：MD5 去重的作用域是整个团队（跨其全部作品），
+ *    冗余一份 team_id 才能让去重查询走单表单索引。
+ *  - 缩略图与预览图**不落列**，由 `storage_key` 按固定规则派生（见 storage/keys.ts）。
+ *    这样少两列冗余，也少两处「派生键与实际文件对不上」的可能。
+ *    迁移（M7）是**按字节搬到新键**，不要求与旧站的派生规则一致，所以这里可以自由约定。
+ *  - 修订链：`parent_id` 是链根（同一逻辑页面），`old_revision_id` 是直接上一版。
+ *    界面上只展示 `activated=true` 的那一版，但历史版本全留。
+ *
+ * ⚠️ MD5 **只建普通索引，不建唯一约束**（实施方案里曾写「部分唯一索引仅约束新数据」，
+ * 这里刻意不做）：同一份字节在修订链里被重新上传是正常操作，
+ * 加硬约束会把「合法操作」变成 500；去重改在应用层判定，可以给出带上下文的友好错误，
+ * 也能区分「同一作品内重复」与「同团队跨作品重复」两种情形。
+ */
+export const files = pgTable(
+  'files',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** 原始文件名（含扩展名），界面上显示的就是它 */
+    name: text('name').notNull(),
+    /** 自然排序键：`p2.jpg` 要排在 `p10.jpg` 前面 */
+    sortName: text('sort_name').notNull(),
+    /** 存储键（原图）。缩略图/预览图由它派生。 */
+    storageKey: text('storage_key').notNull(),
+    size: bigint('size', { mode: 'number' }).notNull().default(0),
+    width: integer('width').notNull().default(0),
+    height: integer('height').notNull().default(0),
+    md5: text('md5').notNull().default(''),
+    sha256: text('sha256').notNull().default(''),
+    /** 工作流状态，取值见 domain/workflow.ts 的 FILE_STATES */
+    state: text('state').notNull().default('sourced'),
+    /** 第几版，从 1 开始 */
+    revision: integer('revision').notNull().default(1),
+    /** 修订链根（同一逻辑页面的第一版）；首版时等于自身 id */
+    parentId: uuid('parent_id'),
+    /** 直接上一版 */
+    oldRevisionId: uuid('old_revision_id'),
+    /** 是否是当前生效版本 */
+    activated: boolean('activated').notNull().default(true),
+    uploadedBy: uuid('uploaded_by').references(() => users.id, { onDelete: 'set null' }),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** 软删除：留行是为了让「标号/翻译曾经存在过」有据可查 */
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('files_team_md5_idx').on(t.teamId, t.md5),
+    index('files_project_sort_idx').on(t.projectId, t.sortName),
+    index('files_project_state_idx').on(t.projectId, t.state),
+    index('files_parent_idx').on(t.parentId),
+    index('files_legacy_id_idx').on(t.legacyId),
+  ],
+);
+
+/**
+ * 状态变更流水。**每次进入某阶段都记一行** —— 这就是需求里
+ * 「工作人员确认后维护图组状态」的落点，也是统计与通知的依据。
+ * 与 `files.state` 的关系：那是当前态（供筛选与聚合，快），这是历史（供追溯，全）。
+ */
+export const fileStates = pgTable(
+  'file_states',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    fileId: uuid('file_id')
+      .notNull()
+      .references(() => files.id, { onDelete: 'cascade' }),
+    /** 首条记录没有前态 */
+    fromState: text('from_state'),
+    toState: text('to_state').notNull(),
+    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    note: text('note').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('file_states_file_idx').on(t.fileId, t.createdAt),
+    index('file_states_created_idx').on(t.createdAt),
+  ],
+);
+
+// ── 标号 / 译文 / 署名 / 通知（M3 翻校）──────────────────────
+
+/**
+ * 标号（标注）。对应 moeflow 的 `Source` 实体 —— 它是**引用文件的独立集合**，
+ * 不是「文件上的一个字符串字段」，因为一个标号要挂多份译文（每种目标语言一份）、
+ * 要能被单独选中与拖动、还要参与署名统计。
+ *
+ * 坐标**一律归一化到 0–1**（相对图片宽高）。这样同一份标号在 520px 缩略图、
+ * 2000px 预览图与原始大图上都落在同一位置，换分辨率不会错位。
+ *
+ * `kind` 把「拖框」与「打点」收敛到同一组字段：pin 的 w/h 为 0、x/y 即中心点。
+ * 分成两张表或两套字段，会让后面每一处渲染与命中判定都写两遍分支。
+ *
+ * `vertices` 保留 moeflow 的多边形数据（迁移时是唯一的部分有损点：
+ * 它只有 x/y + vertices，没有 w/h，迁移工具要从 vertices 推 bbox 合成 w/h）。
+ */
+export const sources = pgTable(
+  'sources',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    fileId: uuid('file_id')
+      .notNull()
+      .references(() => files.id, { onDelete: 'cascade' }),
+    /** box | pin */
+    kind: text('kind').notNull().default('box'),
+    // 用 doublePrecision 而不是 real：归一化坐标在 float4 上往返一次会掉精度，
+    // 表现为「标号存了又读之后位置微微变了」，在反复微调的场景里很烦人。
+    x: doublePrecision('x').notNull().default(0),
+    y: doublePrecision('y').notNull().default(0),
+    w: doublePrecision('w').notNull().default(0),
+    h: doublePrecision('h').notNull().default(0),
+    /** 多边形顶点 `[[x,y],…]`（归一化）；null 表示用上面的矩形 */
+    vertices: jsonb('vertices'),
+    /** 同一段话被拆到多个框时归组，便于整组移动 */
+    groupId: uuid('group_id'),
+    orderIndex: integer('order_index').notNull().default(0),
+    /** 原文 */
+    content: text('content').notNull().default(''),
+    /** 给译者的备注（如「这句是双关」） */
+    note: text('note').notNull().default(''),
+    /** 排版样式（字号比例/对齐/竖排/颜色/描边）。见 shared 的 TextStyle。 */
+    style: jsonb('style').notNull().default({}),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('sources_file_order_idx').on(t.fileId, t.orderIndex),
+    index('sources_group_idx').on(t.groupId),
+    index('sources_legacy_id_idx').on(t.legacyId),
+  ],
+);
+
+/**
+ * 译文。**一个标号会有多份候选**（每人一份）+ 一个选中态 + 校对态 ——
+ * 这是 moeflow 的原始语义，必须保留：
+ * 同一句话经常有人给出不同译法，压平成「一标号一行」会直接丢数据。
+ * 界面上 v1 可以只展示选中的那份，但表结构不能压平。
+ *
+ * `is_selected` 用**部分唯一索引**约束「每个 (标号, 语言) 至多一份被选中」。
+ * 这里用部分唯一索引是合适的（不像 files.md5 那个场景）：这是真正的不变量，
+ * 且索引的 WHERE 列没有 NULL 语义问题。
+ */
+export const translations = pgTable(
+  'translations',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    sourceId: uuid('source_id')
+      .notNull()
+      .references(() => sources.id, { onDelete: 'cascade' }),
+    targetId: uuid('target_id')
+      .notNull()
+      .references(() => targets.id, { onDelete: 'cascade' }),
+    /** 译者。用户注销时置 null，但**译文内容不跟着人走** —— 那是作品的内容。 */
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    content: text('content').notNull().default(''),
+    /** 校对后的文本；空串表示尚未校对 */
+    proofreadContent: text('proofread_content').notNull().default(''),
+    proofreaderId: uuid('proofreader_id').references(() => users.id, { onDelete: 'set null' }),
+    proofreadAt: timestamp('proofread_at', { withTimezone: true }),
+    /** 多候选中「最终采用」的那一份 */
+    isSelected: boolean('is_selected').notNull().default(false),
+    machineTranslated: boolean('machine_translated').notNull().default(false),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('translations_source_target_user_uq').on(t.sourceId, t.targetId, t.userId),
+    uniqueIndex('translations_one_selected_uq')
+      .on(t.sourceId, t.targetId)
+      .where(sql`${t.isSelected}`),
+    index('translations_target_idx').on(t.targetId),
+    index('translations_user_idx').on(t.userId),
+  ],
+);
+
+/**
+ * 署名台账。
+ *
+ * moeflow 把「谁翻译了这张图」存成文件上的**自由文本串**（多人用 `、` 连接），
+ * 后果是：没有历史、覆盖即抹除、改名要全库改、统计要靠解析字符串。
+ * 这里改成一张台账表，显示串从台账派生 —— 顺序即 `created_at` 顺序，
+ * 所以迁移时必须**按原 token 顺序插入**，否则署名会静默变序。
+ *
+ * 唯一键 `(file_id, role, user_id)` 让自动记账天然幂等（`ON CONFLICT DO NOTHING`），
+ * 同时保证同一个人在同一个角色上只出现一次 —— 这正是署名该有的样子。
+ */
+export const fileCredits = pgTable(
+  'file_credits',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    /**
+     * 插入顺序。**必须单独有这一列**，不能靠 `created_at` 排 ——
+     * PostgreSQL 的 `now()` 返回的是**事务开始时间**，同一个事务里插入的多行
+     * 拿到的是完全相同的时间戳，于是「署名顺序 = 录入顺序」这条保证会失效，
+     * 顺序退化成按随机 uuid 排。这个坑是 m3-verify 的断言抓出来的。
+     * bigserial 由序列分配，严格递增，事务内外都准。
+     */
+    seq: bigserial('seq', { mode: 'number' }).notNull(),
+    fileId: uuid('file_id')
+      .notNull()
+      .references(() => files.id, { onDelete: 'cascade' }),
+    /** 冗余团队列：署名要按团队统计，避免每次 join 到 files */
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    /** translator | proofreader | typesetter | supervisor | other */
+    role: text('role').notNull(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    /** 手工录入时保留外部署名（迁移自 moeflow 的自由文本，可能不是站内用户） */
+    displayName: text('display_name').notNull().default(''),
+    /** auto | manual */
+    source: text('source').notNull().default('auto'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('file_credits_file_role_user_uq').on(t.fileId, t.role, t.userId),
+    index('file_credits_file_idx').on(t.fileId, t.seq),
+    index('file_credits_team_idx').on(t.teamId),
+  ],
+);
+
+/**
+ * 个人通知 —— 工作流推进时点名给「下一环节的人」。
+ *
+ * 与 `notices`（站点公告，所有人可见）是两回事：那是广播，这是投递。
+ * 之所以不复用同一张表：公告的「已读」是每人一行、且对所有人都有意义；
+ * 通知是给具体某个人的，混在一起会让「未读数」变成两种口径的叠加。
+ */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** 形如 `stage.entered_proofreading`，前端据此选图标；后端不定文案 */
+    kind: text('kind').notNull(),
+    title: text('title').notNull(),
+    body: text('body').notNull().default(''),
+    /** 点通知跳到哪儿 */
+    teamId: uuid('team_id'),
+    projectId: uuid('project_id'),
+    fileId: uuid('file_id'),
+    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('notifications_user_created_idx').on(t.userId, t.createdAt),
+    index('notifications_user_unread_idx').on(t.userId, t.readAt),
+  ],
+);
+
+// ── 邀请码 ──────────────────────────────────────────────────
+
+export const inviteCodes = pgTable(
+  'invite_codes',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    code: text('code').notNull().unique(),
+    /** 一码绑一团队：注册时自动入团 */
+    teamId: uuid('team_id').references(() => teams.id, { onDelete: 'cascade' }),
+    /** 入团时授予的角色 */
+    roleId: uuid('role_id').references(() => roles.id, { onDelete: 'set null' }),
+    /** NULL = 不限次数 */
+    maxUses: integer('max_uses'),
+    usedCount: integer('used_count').notNull().default(0),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    enabled: boolean('enabled').notNull().default(true),
+    note: text('note').notNull().default(''),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    legacyId: text('legacy_id'),
+  },
+  (t) => [index('invite_codes_team_idx').on(t.teamId)],
+);
+
+// ── 限流 ────────────────────────────────────────────────────
+
+/**
+ * 定长窗口限流。放数据库而不是内存，是为了**重启不清零**、多实例共享 ——
+ * 对标图译空间的同名表。
+ */
+export const rateLimits = pgTable('rate_limits', {
+  bucket: text('bucket').primaryKey(),
+  windowStart: timestamp('window_start', { withTimezone: true }).notNull(),
+  count: integer('count').notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// ── 站点设置与通知 ──────────────────────────────────────────
+
+export const siteSettings = pgTable('site_settings', {
+  key: text('key').primaryKey(),
+  value: jsonb('value').notNull(),
+  updatedBy: uuid('updated_by').references(() => users.id, { onDelete: 'set null' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const notices = pgTable(
+  'notices',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    title: text('title').notNull().default(''),
+    content: text('content').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('notices_created_idx').on(t.createdAt)],
+);
+
+/**
+ * 已读记录用**关联表**，而不是 moeflow 的「每用户一条记录塞一个 notice id 列表」：
+ * 标记已读是一行写入而非重写整个数组，按公告统计已读也可索引。
+ */
+export const noticeReads = pgTable(
+  'notice_reads',
+  {
+    noticeId: uuid('notice_id')
+      .notNull()
+      .references(() => notices.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    readAt: timestamp('read_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.noticeId, t.userId] })],
+);
+
+// ── 操作日志 ────────────────────────────────────────────────
+
+export const opLogs = pgTable(
+  'op_logs',
+  {
+    id: bigserial('id', { mode: 'number' }).primaryKey(),
+    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    teamId: uuid('team_id'),
+    action: text('action').notNull(),
+    targetType: text('target_type').notNull().default(''),
+    targetId: text('target_id').notNull().default(''),
+    targetName: text('target_name').notNull().default(''),
+    detail: jsonb('detail'),
+    ip: text('ip'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('op_logs_created_idx').on(t.createdAt),
+    index('op_logs_actor_idx').on(t.actorId),
+  ],
+);
+
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
+export type Session = typeof sessions.$inferSelect;
+export type Team = typeof teams.$inferSelect;
+export type Role = typeof roles.$inferSelect;
+export type TeamMember = typeof teamMembers.$inferSelect;
+export type InviteCode = typeof inviteCodes.$inferSelect;
+export type Notice = typeof notices.$inferSelect;
+export type ProjectSet = typeof projectSets.$inferSelect;
+export type Project = typeof projects.$inferSelect;
+export type ProjectRole = typeof projectRoles.$inferSelect;
+export type ProjectMember = typeof projectMembers.$inferSelect;
+export type Target = typeof targets.$inferSelect;
+export type FileRow = typeof files.$inferSelect;
+export type FileStateRow = typeof fileStates.$inferSelect;
+export type Source = typeof sources.$inferSelect;
+export type NewSource = typeof sources.$inferInsert;
+export type Translation = typeof translations.$inferSelect;
+export type FileCredit = typeof fileCredits.$inferSelect;
+export type Notification = typeof notifications.$inferSelect;

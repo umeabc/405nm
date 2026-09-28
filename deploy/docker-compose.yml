@@ -1,0 +1,99 @@
+# 405nm —— 四容器编排：frontend / backend / worker / db
+#
+# 用法（在仓库根目录）：
+#   cp deploy/.env.example deploy/.env      # 填 SESSION_SECRET 等
+#   docker compose -f deploy/docker-compose.yml up -d
+#   docker compose -f deploy/docker-compose.yml run --rm backend node backend/dist/db/migrate.js
+#
+# 只对外暴露 frontend 一个端口，backend / worker / db 都只在内网。
+#
+# ⚠️ 部署到共享主机时：目录、端口、数据卷都必须与被部署机器上的其他项目错开，
+#    并且**只增不改不删** —— 不要碰别人的 compose、nginx 配置与数据卷。
+#
+# 每个服务都设了 mem_limit：测试机上还跑着萌翻 / 380nm / ba-query，
+# 一旦本栈失控也不能把邻居挤成 OOM。要调大请先确认整机余量。
+
+name: nm405
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    # 小内存机器上必须收紧 Postgres 的默认值，否则光 shared_buffers 就可能压垮邻居。
+    command:
+      - postgres
+      - -c
+      - shared_buffers=96MB
+      - -c
+      - max_connections=20
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=32MB
+    mem_limit: 320m
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-nm405}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须在 deploy/.env 中设置}
+      POSTGRES_DB: ${POSTGRES_DB:-nm405}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-nm405} -d ${POSTGRES_DB:-nm405}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # 不映射端口。需要直连调试时临时加：127.0.0.1:5433:5432
+
+  backend:
+    image: 405nm-backend:${IMAGE_TAG:-dev}
+    restart: unless-stopped
+    command: node backend/dist/index.js
+    # 比 worker 宽一点：图片解码发生在 API 进程里，libvips 处理一张大图
+    # 的瞬时峰值是「宽×高×通道」，256m 在 4000px 级别的扫图上会有点紧。
+    # 这只是上限而非预留，调大不会实际占用更多内存。
+    mem_limit: 320m
+    environment: &app-env
+      NODE_ENV: production
+      PORT: "3000"
+      HOST: 0.0.0.0
+      DATABASE_URL: postgres://${POSTGRES_USER:-nm405}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-nm405}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET 必须在 deploy/.env 中设置（至少 32 字符）}
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
+      STORAGE_DIR: /data/uploads
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # 留空 = 跟随 NODE_ENV。内网纯 HTTP 测试环境需显式设为 false，否则浏览器拒收 Secure Cookie。
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+    volumes:
+      # 图片落盘目录，backend 与 worker 共享
+      - uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    image: 405nm-backend:${IMAGE_TAG:-dev}
+    restart: unless-stopped
+    # 同一个镜像，只换入口 —— 调度器 / 抓取 / AI 批量都在这里跑。
+    # backend 绝不能起调度循环，否则两个容器会同时发布。
+    command: node backend/dist/worker/index.js
+    mem_limit: 224m
+    environment: *app-env
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    image: 405nm-frontend:${IMAGE_TAG:-dev}
+    restart: unless-stopped
+    mem_limit: 64m
+    ports:
+      - "${FRONTEND_BIND:-127.0.0.1}:${FRONTEND_PORT:-8790}:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres-data:
+  uploads:

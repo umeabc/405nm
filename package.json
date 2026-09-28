@@ -1,0 +1,28 @@
+{
+  "name": "405nm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "彩翻2.0 —— 漫画翻译协作与发布平台（图源采集 → 翻译 → 校对 → 嵌字 → 发布）",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*",
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev:backend": "npm run dev -w backend",
+    "dev:frontend": "npm run dev -w frontend",
+    "dev:worker": "npm run dev:worker -w backend",
+    "build": "npm run build -w packages/shared && npm run build -w backend && npm run build -w frontend",
+    "build:shared": "npm run build -w packages/shared",
+    "build:backend": "npm run build -w packages/shared && npm run build -w backend",
+    "build:frontend": "npm run build -w packages/shared && npm run build -w frontend",
+    "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w backend && npm run typecheck -w frontend",
+    "migrate": "npm run migrate -w backend",
+    "migrate:generate": "npm run migrate:generate -w backend",
+    "test:shared": "npm run build -w packages/shared && node tests/shared-verify.mjs",
+    "test:regression": "node tests/regression.mjs"
+  }
+}

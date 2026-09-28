@@ -1,0 +1,36 @@
+{
+  "name": "@405nm/backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "dev:worker": "tsx watch src/worker/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "start:worker": "node dist/worker/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "migrate": "drizzle-kit migrate",
+    "migrate:generate": "drizzle-kit generate",
+    "seed": "tsx src/seed.ts",
+    "seed:dist": "node dist/seed.js",
+    "cli": "tsx src/cli/admin.ts",
+    "cli:dist": "node dist/cli/admin.js"
+  },
+  "dependencies": {
+    "@405nm/shared": "^0.1.0",
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/multipart": "^10.1.2",
+    "drizzle-orm": "^0.45.3",
+    "fastify": "^5.6.1",
+    "postgres": "^3.4.7",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "drizzle-kit": "^0.31.4",
+    "tsx": "^4.20.5",
+    "typescript": "^5.8.3"
+  }
+}

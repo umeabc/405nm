@@ -1,0 +1,22 @@
+# 行尾一律 LF。
+#
+# 不是为了洁癖：这个仓库会在 Windows 上开发、在 Linux 上构建镜像。
+# 如果 `Dockerfile` 或 `*.sh` 以 CRLF 存进仓库，Linux 上的 `/bin/sh` 会把
+# 行尾的 \r 当成命令的一部分 —— `RUN apt-get update \` 这种续行会直接报
+# `/bin/sh: 1: apt-get: not found` 或 `: not found`，而报错信息完全指不到行尾符上。
+# 这类问题排查一次要半小时，用两行配置就能永久避免。
+* text=auto eol=lf
+
+# 明确标成二进制，避免 Git 试图「智能」转换它们（也避免 diff 出一堆乱码）。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.avif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+# lockfile 用 LF 且不参与语言的统计（几十万行会淹没真实的代码行数）。
+package-lock.json -diff -merge linguist-generated=true
