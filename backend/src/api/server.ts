@@ -11,6 +11,7 @@ import { registerInsightRoutes } from './routes/insights.js';
 import { registerMoveRoutes } from './routes/move.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerSiteRoutes } from './routes/site.js';
+import { registerSourcingAdminRoutes, registerSourcingRoutes } from './routes/sourcing.js';
 import { registerSourceRoutes } from './routes/sources.js';
 import { registerTeamRoutes } from './routes/teams.js';
 import { registerTranslationRoutes } from './routes/translations.js';
@@ -90,6 +91,8 @@ export async function buildServer(): Promise<FastifyInstance> {
       await registerTranslationRoutes(api);
       await registerWorkflowRoutes(api);
       await registerMoveRoutes(api);
+      await registerSourcingRoutes(api);
+      await registerSourcingAdminRoutes(api);
       await registerInsightRoutes(api);
     },
     { prefix: '/api' },

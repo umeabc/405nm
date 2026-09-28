@@ -5,9 +5,9 @@ import { naturalSortKey } from '@405nm/shared';
 import { db } from '../../db/client.js';
 import { fileStates, files, projects } from '../../db/schema.js';
 import { requireProjectAccess, requireProjectPermission, requireTeamAccess } from '../../domain/authorize.js';
+import { ingestImage } from '../../domain/ingest-image.js';
 import { env } from '../../env.js';
 import { AppError, badRequest, notFound } from '../../lib/errors.js';
-import { processImage } from '../../lib/image.js';
 import { extOf, mimeForExt } from '../../lib/mime.js';
 import { logOp } from '../../lib/oplog.js';
 import {
@@ -230,96 +230,45 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
           continue;
         }
 
-        let info;
+        // ⚠️ 这里**刻意不再先 processImage 一次**。
+        // 它原本是为了拿摘要做去重、顺便校验图片；现在那两件事都在 ingestImage 里做，
+        // 再留着就是同一张图解码两遍 —— 一张 8000×12000 的扫图解码后约 380MB，
+        // 在小内存机器上这一下就是 OOM。解码失败仍会被下面的 catch 逐张记成失败项。
+
+        // 去重判定与落库都交给 domain/ingest-image —— **图源导入走的是同一份实现**。
+        // 各写一份的话，两边迟早分叉，最典型的症状是「导入进来的图没有缩略图」
+        // 而上传的图有，而这种差异不会有人想到去查两处代码。
         try {
-          info = await processImage(buffer);
-        } catch (err) {
-          const code = err instanceof AppError ? err.code : 'UNSUPPORTED_IMAGE';
-          const reason = err instanceof AppError ? err.message : '无法处理的图片';
-          failures.push({ name: filename, reason, code });
-          continue;
-        }
-
-        // MD5 去重的作用域是**整个团队**，但只有「同一作品内已存在」才算冲突。
-        // 跨作品重复是合法的（同一张彩页被两个作品引用），只在响应里提示一下。
-        const existing = await db
-          .select({ id: files.id, name: files.name, projectId: files.projectId })
-          .from(files)
-          .where(
-            and(
-              eq(files.teamId, access.project.teamId),
-              eq(files.md5, info.md5),
-              isNull(files.deletedAt),
-            ),
-          )
-          .limit(1);
-        const dup = existing[0];
-        if (dup && dup.projectId === projectId) {
-          duplicates.push({ name: filename, existingId: dup.id, existingName: dup.name });
-          continue;
-        }
-
-        const ext = safeImageExt(filename);
-        const key = newFileKey(crypto.randomUUID(), ext);
-
-        // 先落盘再写库。反过来会让数据库里存在「指向不存在文件」的行，
-        // 在界面上表现为永久性的裂图，而且没法自愈。
-        await storage.put(key, buffer);
-        await storage.put(variantKey(key, 'thumb'), info.thumb);
-        await storage.put(variantKey(key, 'preview'), info.preview);
-
-        try {
-          const inserted = await db.transaction(async (tx) => {
-            const rows = await tx
-              .insert(files)
-              .values({
-                teamId: access.project.teamId,
-                projectId,
-                name: filename,
-                sortName: naturalSortKey(filename),
-                storageKey: key,
-                size: info.size,
-                width: info.width,
-                height: info.height,
-                md5: info.md5,
-                sha256: info.sha256,
-                state: 'sourced',
-                uploadedBy: user.id,
-              })
-              .returning({ id: files.id });
-            const row = rows[0];
-            if (!row) throw new Error('写入文件记录失败');
-
-            await tx.insert(fileStates).values({
-              fileId: row.id,
-              fromState: null,
-              toState: 'sourced',
-              actorId: user.id,
-              note: '上传入库',
-            });
-
-            // 作品的「最近更新」要跟着动，否则工作台按更新时间排序会失真。
-            await tx.update(projects).set({ updatedAt: new Date() }).where(eq(projects.id, projectId));
-
-            return row;
+          const outcome = await ingestImage({
+            teamId: access.project.teamId,
+            projectId,
+            actorId: user.id,
+            name: filename,
+            buffer,
+            note: '上传入库',
           });
+
+          if (outcome.status === 'duplicate') {
+            duplicates.push({
+              name: filename,
+              existingId: outcome.existingId,
+              existingName: outcome.existingName,
+            });
+            continue;
+          }
 
           uploaded.push({
-            id: inserted.id,
-            name: filename,
-            width: info.width,
-            height: info.height,
-            size: info.size,
+            id: outcome.id,
+            name: outcome.name,
+            width: outcome.width,
+            height: outcome.height,
+            size: outcome.size,
           });
         } catch (err) {
-          // 写库失败就把刚落的三个对象清掉，别留孤儿文件占着空间。
-          await storage.removeMany([
-            key,
-            variantKey(key, 'thumb'),
-            variantKey(key, 'preview'),
-          ]);
+          const code = err instanceof AppError ? err.code : 'SAVE_FAILED';
+          const reason = err instanceof AppError ? err.message : '保存失败，请重试';
           request.log.error({ err }, '写入文件记录失败');
-          failures.push({ name: filename, reason: '保存失败，请重试', code: 'SAVE_FAILED' });
+          failures.push({ name: filename, reason, code });
         }
       }
 

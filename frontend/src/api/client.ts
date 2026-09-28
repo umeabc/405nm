@@ -657,6 +657,125 @@ export const sourceApi = {
     apiRequest<{ ok: true }>(`/files/${fileId}/sources/${sourceId}`, { method: 'DELETE' }),
 };
 
+// ── 图源导入（M4）────────────────────────────────────────────
+
+export type ImportTaskStatus = 'pending' | 'running' | 'done' | 'failed';
+
+export type ImportTaskRow = {
+  id: string;
+  projectId: string;
+  /** 用户粘进来的原始链接 */
+  inputUrl: string;
+  source: string;
+  status: ImportTaskStatus;
+  total: number;
+  done: number;
+  imported: number;
+  duplicated: number;
+  failed: number;
+  errorCode: string;
+  errorMessage: string;
+  /** 解析阶段的提示，例如「只取了最早 50 个作品」 */
+  notes: string[];
+  attempts: number;
+  createdAt: string;
+  finishedAt: string | null;
+};
+
+export type ImportItemRow = {
+  id: string;
+  idx: number;
+  url: string;
+  status: 'pending' | 'imported' | 'duplicated' | 'failed';
+  fileId: string | null;
+  code: string;
+  reason: string;
+  fileName: string | null;
+};
+
+export type SourcingAccountRow = {
+  id: string;
+  source: string;
+  label: string;
+  /** **永远只有掩码**，明文不回前端 */
+  credentials: Record<string, string>;
+  hasCredentials: boolean;
+  proxyUrl: string;
+  enabled: boolean;
+  lastCheckedAt: string | null;
+  lastStatus: string;
+  lastMessage: string;
+  updatedAt: string;
+};
+
+export const importApi = {
+  /** 支持哪些图源 + 一次最多粘几条 */
+  sources: () =>
+    apiRequest<{ sources: Array<{ id: string; label: string }>; maxUrlsPerRequest: number }>(
+      '/sourcing/sources',
+    ),
+
+  /** 建任务。**每条链接一个任务**，立刻返回，之后靠轮询看进度。 */
+  create: (projectId: string, urls: string[]) =>
+    apiRequest<{ tasks: ImportTaskRow[] }>(`/projects/${projectId}/imports`, {
+      method: 'POST',
+      body: { urls },
+    }),
+
+  listOfProject: (projectId: string) =>
+    apiRequest<{ tasks: ImportTaskRow[] }>(`/projects/${projectId}/imports`),
+
+  /** 批量取进度。一次粘十条链接时，这个是每轮唯一的请求。 */
+  poll: (ids: string[]) =>
+    apiRequest<{ tasks: ImportTaskRow[] }>(`/imports?ids=${ids.join(',')}`),
+
+  detail: (taskId: string) =>
+    apiRequest<{ task: ImportTaskRow; items: ImportItemRow[] }>(`/imports/${taskId}`),
+
+  retry: (taskId: string) =>
+    apiRequest<{ task: ImportTaskRow }>(`/imports/${taskId}/retry`, { method: 'POST' }),
+};
+
+export const sourcingAdminApi = {
+  list: () => apiRequest<{ accounts: SourcingAccountRow[] }>('/admin/sourcing/accounts'),
+
+  create: (payload: {
+    source: string;
+    label: string;
+    credentials?: Record<string, string>;
+    proxyUrl?: string;
+    enabled?: boolean;
+  }) =>
+    apiRequest<{ account: SourcingAccountRow }>('/admin/sourcing/accounts', {
+      method: 'POST',
+      body: payload,
+    }),
+
+  update: (
+    id: string,
+    payload: Partial<{
+      source: string;
+      label: string;
+      credentials: Record<string, string>;
+      proxyUrl: string;
+      enabled: boolean;
+    }>,
+  ) =>
+    apiRequest<{ account: SourcingAccountRow }>(`/admin/sourcing/accounts/${id}`, {
+      method: 'PATCH',
+      body: payload,
+    }),
+
+  remove: (id: string) =>
+    apiRequest<{ ok: true }>(`/admin/sourcing/accounts/${id}`, { method: 'DELETE' }),
+
+  test: (id: string) =>
+    apiRequest<{ result: { ok: boolean; status: string; message: string }; account: SourcingAccountRow }>(
+      `/admin/sourcing/accounts/${id}/test`,
+      { method: 'POST' },
+    ),
+};
+
 export const translateApi = {
   /** 工作台主数据：一张图的标号 + 指定语言的全部译文候选。 */
   load: (fileId: string, targetId?: string) =>

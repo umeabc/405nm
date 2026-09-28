@@ -83,6 +83,24 @@ const schema = z.object({
   SOURCING_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
   /** 抓取并发上限。调高会被上游判定为爬虫，也会先把自己的出口压垮。 */
   SOURCING_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  /**
+   * 图源凭据的加密密钥。**没配就从 SESSION_SECRET 派生**。
+   *
+   * 生产上建议单独配：派生虽然能用，但换 SESSION_SECRET 会让已存的凭据
+   * 全部解不开（表现为「凭据突然全失效」），两件事绑在一起是个隐患。
+   */
+  CREDENTIAL_KEY: z.preprocess(
+    (v) => (v === '' || v === undefined ? undefined : v),
+    z.string().min(16, 'CREDENTIAL_KEY 至少 16 字符').optional(),
+  ),
+  /** 按用户批量时，单个链接最多展开多少个作品/多少页。防止一次点下去抓几千张。 */
+  IMPORT_MAX_WORKS: z.coerce.number().int().positive().default(50),
+  /** 单个链接最多导入多少张图。 */
+  IMPORT_MAX_IMAGES: z.coerce.number().int().positive().default(500),
+  /** worker 每次 tick 最多认领几个导入任务。 */
+  IMPORT_BATCH: z.coerce.number().int().positive().default(2),
+  /** 导入任务的租约时长（分钟）。worker 崩了之后由下一个 tick 回收。 */
+  IMPORT_LEASE_MINUTES: z.coerce.number().int().positive().default(15),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });

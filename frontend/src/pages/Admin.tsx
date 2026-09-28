@@ -16,6 +16,7 @@ import {
   Popconfirm,
   Progress,
   Row,
+  Select,
   Space,
   Switch,
   Table,
@@ -26,7 +27,14 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useState } from 'react';
-import { ApiError, adminApi, type NoticeRow, type PublicUser } from '../api/client';
+import {
+  ApiError,
+  adminApi,
+  sourcingAdminApi,
+  type NoticeRow,
+  type PublicUser,
+  type SourcingAccountRow,
+} from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { PageHeader } from '../components/AppShell';
 import { invalidateBranding, useBranding } from '../hooks/useBranding';
@@ -69,6 +77,7 @@ export default function AdminPage() {
           { key: 'users', label: '用户', children: <UsersTab /> },
           { key: 'teams', label: '团队概览', children: <TeamsTab /> },
           { key: 'settings', label: '站点设置', children: <SettingsTab /> },
+          { key: 'sourcing', label: '图源账号', children: <SourcingTab /> },
           { key: 'notices', label: '公告', children: <NoticesTab /> },
         ]}
       />
@@ -507,6 +516,297 @@ function MascotCard() {
         </Space>
       </Space>
     </div>
+  );
+}
+
+// ── 图源账号 ────────────────────────────────────────────────
+
+/**
+ * 每类图源需要的凭据键。
+ *
+ * 写死而不是让管理员自由填 JSON：键名写错**不会报错**，只会表现为
+ * 「配了凭据但好像没生效」—— 那种问题要查到抓取层才能定位。
+ * 用固定字段就等于把键名拼写这件事从用户手里拿走了。
+ */
+const CREDENTIAL_FIELDS: Record<string, Array<{ key: string; label: string; hint?: string }>> = {
+  twitter: [],
+  twitter_user: [
+    { key: 'bearer', label: 'GraphQL bearer', hint: 'X 网页版的公开 bearer；按用户抓取需要它' },
+    { key: 'userMediaQueryId', label: 'UserMedia 查询 id', hint: '上游会不定期更换；过期后按用户抓取会失败' },
+  ],
+  pixiv: [{ key: 'phpSessId', label: 'PHPSESSID', hint: '只有抓 R-18 作品时才需要' }],
+  pixiv_user: [{ key: 'phpSessId', label: 'PHPSESSID', hint: '只有抓 R-18 作品时才需要' }],
+  bluesky: [],
+  bluesky_user: [],
+  external: [],
+};
+
+const SOURCE_OPTIONS = [
+  { value: 'pixiv', label: 'Pixiv 作品' },
+  { value: 'pixiv_user', label: 'Pixiv 画师' },
+  { value: 'twitter', label: 'X 单条推文' },
+  { value: 'twitter_user', label: 'X 按用户' },
+  { value: 'bluesky', label: 'Bluesky 帖子' },
+  { value: 'bluesky_user', label: 'Bluesky 按用户' },
+];
+
+function SourcingTab() {
+  const { message } = AntApp.useApp();
+  const [rows, setRows] = useState<SourcingAccountRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<SourcingAccountRow | 'new' | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState<string | null>(null);
+
+  const [form] = Form.useForm<Record<string, unknown>>();
+  const sourceValue = Form.useWatch('source', form) as string | undefined;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await sourcingAdminApi.list();
+      setRows(res.accounts);
+    } catch (err) {
+      message.error(err instanceof ApiError ? err.message : '加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }, [message]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function save() {
+    const values = await form.validateFields();
+    const source = String(values.source ?? '');
+    setSaving(true);
+    try {
+      const credentials: Record<string, string> = {};
+      for (const field of CREDENTIAL_FIELDS[source] ?? []) {
+        const value = values[field.key];
+        // 留空表示「不动这一项」。编辑时前端只拿得到掩码，没法回填明文。
+        if (typeof value === 'string' && value !== '') credentials[field.key] = value;
+      }
+
+      const common = {
+        label: String(values.label ?? ''),
+        proxyUrl: String(values.proxyUrl ?? ''),
+        enabled: values.enabled !== false,
+      };
+
+      if (editing === 'new') {
+        await sourcingAdminApi.create({ source, ...common, credentials });
+      } else if (editing) {
+        await sourcingAdminApi.update(editing.id, {
+          ...common,
+          // 一个键都没填就**不动**凭据 —— 否则「改个名字」会顺手把凭据清空。
+          ...(Object.keys(credentials).length > 0 ? { credentials } : {}),
+        });
+      }
+      message.success('已保存');
+      setEditing(null);
+      void load();
+    } catch (err) {
+      message.error(err instanceof ApiError ? err.message : '保存失败');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function test(id: string) {
+    setTesting(id);
+    try {
+      const res = await sourcingAdminApi.test(id);
+      if (res.result.ok) message.success(res.result.message);
+      else message.warning(res.result.message);
+      setRows((prev) => prev.map((r) => (r.id === id ? res.account : r)));
+    } catch (err) {
+      message.error(err instanceof ApiError ? err.message : '测试失败');
+    } finally {
+      setTesting(null);
+    }
+  }
+
+  const columns: ColumnsType<SourcingAccountRow> = [
+    { title: '名字', dataIndex: 'label', width: 150 },
+    {
+      title: '图源',
+      dataIndex: 'source',
+      width: 130,
+      render: (value: string) => SOURCE_OPTIONS.find((o) => o.value === value)?.label ?? value,
+    },
+    {
+      title: '凭据',
+      width: 200,
+      render: (_, row) =>
+        row.hasCredentials ? (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {Object.entries(row.credentials)
+              .map(([k, v]) => `${k}=${v}`)
+              .join('  ')}
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            未配置
+          </Typography.Text>
+        ),
+    },
+    {
+      title: '出口',
+      width: 150,
+      render: (_, row) =>
+        row.proxyUrl ? (
+          <Typography.Text style={{ fontSize: 12 }}>{row.proxyUrl}</Typography.Text>
+        ) : (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            用站点默认
+          </Typography.Text>
+        ),
+    },
+    {
+      title: '最近测试',
+      render: (_, row) =>
+        row.lastCheckedAt ? (
+          <Space direction="vertical" size={2}>
+            <Tag
+              color={row.lastStatus === 'ok' ? 'green' : row.lastStatus === 'skip' ? undefined : 'red'}
+              style={{ marginInlineEnd: 0 }}
+            >
+              {row.lastStatus || '未知'}
+            </Tag>
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              {row.lastMessage}
+            </Typography.Text>
+          </Space>
+        ) : (
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            没测过
+          </Typography.Text>
+        ),
+    },
+    {
+      title: '启用',
+      width: 80,
+      render: (_, row) => (
+        <Tag color={row.enabled ? 'green' : undefined} style={{ marginInlineEnd: 0 }}>
+          {row.enabled ? '启用' : '停用'}
+        </Tag>
+      ),
+    },
+    {
+      title: '操作',
+      width: 200,
+      render: (_, row) => (
+        <Space size={4}>
+          <Button size="small" loading={testing === row.id} onClick={() => void test(row.id)}>
+            测试
+          </Button>
+          <Button
+            size="small"
+            onClick={() => {
+              form.resetFields();
+              form.setFieldsValue({ source: row.source, label: row.label, proxyUrl: row.proxyUrl, enabled: row.enabled });
+              setEditing(row);
+            }}
+          >
+            编辑
+          </Button>
+          <Popconfirm
+            title="删除这个图源账号？"
+            description="正在用它的导入会退回匿名抓取。"
+            okText="删除"
+            okButtonProps={{ danger: true }}
+            cancelText="取消"
+            onConfirm={() => {
+              void sourcingAdminApi
+                .remove(row.id)
+                .then(() => {
+                  message.success('已删除');
+                  void load();
+                })
+                .catch((err: unknown) => message.error(err instanceof ApiError ? err.message : '删除失败'));
+            }}
+          >
+            <Button size="small" danger>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  return (
+    <Card
+      title="图源账号"
+      loading={loading}
+      extra={
+        <Button
+          type="primary"
+          size="small"
+          icon={<PlusOutlined />}
+          onClick={() => {
+            form.resetFields();
+            form.setFieldsValue({ source: 'pixiv', enabled: true });
+            setEditing('new');
+          }}
+        >
+          新增
+        </Button>
+      }
+    >
+      <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+        凭据加密落库，接口只回掩码（<Typography.Text code>••••后四位</Typography.Text>）。
+        多数图源**无需凭据**即可抓公开内容；只有 R-18 作品、私密内容，以及 X 的按用户批量需要配。
+      </Typography.Paragraph>
+
+      <Table rowKey="id" columns={columns} dataSource={rows} pagination={false} size="small" />
+
+      <Modal
+        open={editing !== null}
+        title={editing === 'new' ? '新增图源账号' : '编辑图源账号'}
+        onCancel={() => setEditing(null)}
+        onOk={() => void save()}
+        confirmLoading={saving}
+        okText="保存"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Form form={form} layout="vertical" requiredMark={false}>
+          <Form.Item name="source" label="图源" rules={[{ required: true, message: '请选择图源' }]}>
+            <Select disabled={editing !== 'new'} options={SOURCE_OPTIONS} />
+          </Form.Item>
+
+          <Form.Item name="label" label="名字" rules={[{ required: true, message: '请填一个名字' }]}>
+            <Input placeholder="例如「Pixiv 主号」" />
+          </Form.Item>
+
+          {(CREDENTIAL_FIELDS[sourceValue ?? ''] ?? []).map((field) => (
+            <Form.Item
+              key={field.key}
+              name={field.key}
+              label={field.label}
+              extra={field.hint ? `${field.hint}（留空表示不修改）` : '留空表示不修改'}
+            >
+              <Input.Password placeholder="留空表示不修改" autoComplete="off" />
+            </Form.Item>
+          ))}
+
+          <Form.Item
+            name="proxyUrl"
+            label="出口代理"
+            extra="留空 = 用站点默认（SOURCING_PROXY）。支持 http / https / socks5。"
+          >
+            <Input placeholder="留空用站点默认" />
+          </Form.Item>
+
+          <Form.Item name="enabled" label="启用" valuePropName="checked">
+            <Switch />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </Card>
   );
 }
 

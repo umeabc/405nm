@@ -23,6 +23,7 @@ export type SourcingFailureCode =
   | 'BLOCKED'
   | 'RATE_LIMITED'
   | 'NOT_FOUND'
+  | 'NO_MEDIA'
   | 'UPSTREAM_ERROR'
   | 'HTTP_STATUS'
   | 'TOO_MANY_REDIRECTS'
@@ -78,6 +79,8 @@ export class SourcingError extends Error {
         return '被上游限流，稍后再试';
       case 'NOT_FOUND':
         return '内容不存在或已被删除';
+      case 'NO_MEDIA':
+        return '这个链接里没有图片';
       case 'UPSTREAM_ERROR':
         return '上游暂时出错，稍后再试';
       case 'CONTENT_TYPE':

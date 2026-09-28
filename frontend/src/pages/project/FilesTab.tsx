@@ -2,6 +2,7 @@ import {
   DeleteOutlined,
   EditOutlined,
   InboxOutlined,
+  LinkOutlined,
   ReadOutlined,
   SwapOutlined,
   UploadOutlined,
@@ -28,6 +29,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, fileApi, translateApi, type ProjectFileRow } from '../../api/client';
 import { FileMoveModal } from '../../components/FileMoveModal';
+import { ImportModal } from '../../components/ImportModal';
 import { UploadModal } from '../../components/UploadModal';
 import { useClientConfig } from '../../hooks/useClientConfig';
 import { palette } from '../../theme';
@@ -82,6 +84,8 @@ export function FilesTab({
   const [moving, setMoving] = useState(false);
   /** fileId → 译文进度。列表上每张图显示「译 3/12」用。 */
   const [stats, setStats] = useState<Record<string, { sources: number; translated: number; proofread: number }>>({});
+
+  const [importing, setImporting] = useState(false);
 
   const queueRef = useRef<File[]>([]);
   const flushTimer = useRef<number | null>(null);
@@ -234,6 +238,14 @@ export function FilesTab({
                 上传图片
               </Button>
             </Upload>
+          ) : null}
+
+          {/* 导入与上传是同一件事的两种来源（一个是本地文件、一个是链接），
+              所以用同一个权限位，摆在同一个位置。 */}
+          {can('file.add') ? (
+            <Button size="small" icon={<LinkOutlined />} onClick={() => setImporting(true)}>
+              从链接导入
+            </Button>
           ) : null}
         </Space>
       }
@@ -407,6 +419,18 @@ export function FilesTab({
         maxImageMb={maxImageMb}
         onClose={() => setQueue([])}
         onFinished={() => {
+          void load();
+          void reload();
+        }}
+      />
+
+      <ImportModal
+        open={importing}
+        projectId={projectId}
+        onClose={() => setImporting(false)}
+        // 导入是异步的：这里只在「真的有图进来了」的时候刷新列表，
+        // 而不是打开弹窗就刷 —— 否则用户每开一次弹窗，整个网格就重渲一次。
+        onImported={() => {
           void load();
           void reload();
         }}

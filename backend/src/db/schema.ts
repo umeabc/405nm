@@ -780,3 +780,147 @@ export type NewSource = typeof sources.$inferInsert;
 export type Translation = typeof translations.$inferSelect;
 export type FileCredit = typeof fileCredits.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
+
+// ── 图源采集（M4）───────────────────────────────────────────
+
+/**
+ * 图源账号：一组**具名**的凭据 + 出口。
+ *
+ * 不做成「全站单例」（moeflow 就是单例，一处改动影响所有人），也一上来就
+ * 不做成「每团队必须自带」—— 折中是 `team_id` 可空：
+ *   - `team_id = null` → 全站共享，站点管理员维护；
+ *   - `team_id = 某团队` → 该团队专属，读的时候**优先命中**。
+ *
+ * v1 只有站点管理员能写（与「凭据仅管理员可读写」一致），团队自维护留给后面。
+ */
+export const sourcingAccounts = pgTable(
+  'sourcing_accounts',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    teamId: uuid('team_id').references(() => teams.id, { onDelete: 'cascade' }),
+    /** 图源 id，见 @405nm/shared 的 SOURCE_IDS —— 一个账号只服务一类图源 */
+    source: text('source').notNull(),
+    label: text('label').notNull(),
+    /**
+     * 加密后的凭据 JSON（AES-256-GCM，见 sourcing/credentials.ts）。
+     * **明文绝不落这一列**，也不回传前端 —— API 只给掩码视图。
+     */
+    credentials: text('credentials').notNull().default(''),
+    /** 该账号自己的出口代理。留空则用 SOURCING_PROXY。 */
+    proxyUrl: text('proxy_url').notNull().default(''),
+    enabled: boolean('enabled').notNull().default(true),
+    /** 最近一次可用性结论（人工「测试」或抓取失败时写入），供后台界面显示 */
+    lastCheckedAt: timestamp('last_checked_at', { withTimezone: true }),
+    lastStatus: text('last_status').notNull().default(''),
+    lastMessage: text('last_message').notNull().default(''),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('sourcing_accounts_source_idx').on(t.source, t.enabled),
+    index('sourcing_accounts_team_idx').on(t.teamId),
+  ],
+);
+
+/**
+ * 导入任务：**一个任务对应一条粘贴进来的链接**。
+ *
+ * 一次粘三条链接就是三个任务 —— 而不是一个大任务里塞三种图源。
+ * 这样「哪条链接失败了」「重试哪一条」都能落到具体的行上，
+ * 而一条失败的链接不会拖累另外两条。
+ *
+ * 进度字段（total/done/imported/duplicated/failed）是**冗余的计数器**，
+ * 真相在 import_task_items 里。这样做是为了让前端 1.5s 一次的轮询
+ * 只需要读一行，而不是每次去 count 一遍明细表。
+ */
+export const importTasks = pgTable(
+  'import_tasks',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    projectId: uuid('project_id')
+      .notNull()
+      .references(() => projects.id, { onDelete: 'cascade' }),
+    /** 反范式：按团队列历史、以及去重都要用，省一次 join */
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    /** 用户粘进来的原始链接 */
+    inputUrl: text('input_url').notNull(),
+    /** 识别出的图源；认不出来时为空 */
+    source: text('source').notNull().default(''),
+    accountId: uuid('account_id').references(() => sourcingAccounts.id, { onDelete: 'set null' }),
+
+    /** pending | running | done | failed */
+    status: text('status').notNull().default('pending'),
+    total: integer('total').notNull().default(0),
+    done: integer('done').notNull().default(0),
+    imported: integer('imported').notNull().default(0),
+    duplicated: integer('duplicated').notNull().default(0),
+    failed: integer('failed').notNull().default(0),
+    /** 整条链接级别的失败码/文案（逐张的失败在 items 里） */
+    errorCode: text('error_code').notNull().default(''),
+    errorMessage: text('error_message').notNull().default(''),
+    /** 解析阶段的提示，例如「只取了最早 50 个作品」——必须让用户看到 */
+    notes: jsonb('notes').notNull().default([]),
+
+    /**
+     * 认领与租约。
+     *
+     * 与发布队列同一套：`FOR UPDATE SKIP LOCKED` 原子认领 + 租约超时回收。
+     * 380nm 用的是进程内 `_busy` 标志位，多开一个 worker 就会重复导入 ——
+     * 那是必须修掉的缺陷，不是可以照抄的实现。
+     */
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    attempts: integer('attempts').notNull().default(0),
+
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('import_tasks_project_idx').on(t.projectId, t.createdAt),
+    index('import_tasks_claim_idx').on(t.status, t.createdAt),
+  ],
+);
+
+/** 导入任务里的一张图。逐张落状态，重启后能接着跑。 */
+export const importTaskItems = pgTable(
+  'import_task_items',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    taskId: uuid('task_id')
+      .notNull()
+      .references(() => importTasks.id, { onDelete: 'cascade' }),
+    /** 在这一次导入里的顺序，决定文件名与自然排序 */
+    idx: integer('idx').notNull(),
+    url: text('url').notNull(),
+    /** 下载时必须带的 Referer（i.pximg.net 少了它就是 403） */
+    referer: text('referer').notNull().default(''),
+    /** pending | imported | duplicated | failed */
+    status: text('status').notNull().default('pending'),
+    fileId: uuid('file_id').references(() => files.id, { onDelete: 'set null' }),
+    /** 失败码与给用户看的文案 */
+    code: text('code').notNull().default(''),
+    reason: text('reason').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index('import_task_items_task_idx').on(t.taskId, t.idx),
+    index('import_task_items_status_idx').on(t.taskId, t.status),
+  ],
+);
+
+export type SourcingAccount = typeof sourcingAccounts.$inferSelect;
+export type ImportTask = typeof importTasks.$inferSelect;
+export type ImportTaskItem = typeof importTaskItems.$inferSelect;

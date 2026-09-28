@@ -14,9 +14,13 @@ node_modules
 .gitignore
 
 # 后端产物在镜像里由 `npm run build` 现生成，包里的 dist 反而可能过期。
+# 构建产物与 tsc 的增量状态都要排掉。
+# ⚠️ 尤其是 *.tsbuildinfo：带着旧的增量状态去 COPY，tsc 会认为「文件没变」
+# 而跳过重新编译 —— 源码是新的、产物是旧的，而且构建「成功」、毫无报错。
 backend/dist
 packages/*/dist
-frontend/tsconfig.tsbuildinfo
+*.tsbuildinfo
+**/*.tsbuildinfo
 
 # 环境文件与日志。deploy/.env 含密钥，绝不能进构建上下文。
 .env
