@@ -2,7 +2,7 @@ import { CheckCircleFilled, CloseCircleFilled, MinusCircleFilled, ReloadOutlined
 import { App as AntApp, Button, Modal, Progress, Space, Typography } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError, fileApi, type UploadResult } from '../api/client';
-import { comiku } from '../theme';
+import { palette } from '../theme';
 
 /**
  * 图片上传弹窗。
@@ -223,10 +223,10 @@ export function UploadModal({ projectId, files, maxImageMb, onClose, onFinished 
         {rows.map((row) => (
           <div key={row.key} style={{ marginBottom: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {row.status === 'done' ? <CheckCircleFilled style={{ color: comiku.success }} /> : null}
-              {row.status === 'failed' ? <CloseCircleFilled style={{ color: comiku.danger }} /> : null}
+              {row.status === 'done' ? <CheckCircleFilled style={{ color: palette.success }} /> : null}
+              {row.status === 'failed' ? <CloseCircleFilled style={{ color: palette.danger }} /> : null}
               {row.status === 'skipped' || row.status === 'duplicate' ? (
-                <MinusCircleFilled style={{ color: comiku.inkSoft }} />
+                <MinusCircleFilled style={{ color: palette.inkSoft }} />
               ) : null}
               <Typography.Text
                 ellipsis
@@ -245,7 +245,7 @@ export function UploadModal({ projectId, files, maxImageMb, onClose, onFinished 
                 percent={row.percent}
                 size="small"
                 showInfo={false}
-                strokeColor={row.status === 'done' ? comiku.success : comiku.primary}
+                strokeColor={row.status === 'done' ? palette.success : palette.primary}
                 style={{ marginBottom: 0 }}
               />
             ) : null}

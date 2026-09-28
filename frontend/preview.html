@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>405nm · 宽视口预览</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #222;
+      }
+
+      /* 把 1440×900 的 iframe 缩放进窄视口。
+         transform 由父页施加，iframe **内部**的布局视口仍是 1440px ——
+         媒体查询因此按 1440px 判定，桌面版布局会正常出现。
+         直接缩小 iframe 的 width 是行不通的：那样媒体查询会跟着变，
+         看到的还是窄屏版，白白以为桌面布局坏了。 */
+      .frame {
+        width: 1440px;
+        height: 900px;
+        border: 0;
+        display: block;
+        transform: scale(var(--k, 0.36));
+        transform-origin: top left;
+      }
+
+      .wrap {
+        width: calc(1440px * var(--k, 0.36));
+        height: calc(900px * var(--k, 0.36));
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap"><iframe class="frame" id="f"></iframe></div>
+    <script>
+      // 用法：/preview.html?p=/&theme=dark&k=0.36
+      // 页面是 dev-only 的检查工具，不进构建产物（vite 只把 public/ 搬进 build/）。
+      const q = new URLSearchParams(location.search);
+      const path = q.get('p') ?? '/';
+      const theme = q.get('theme');
+      const k = q.get('k');
+      if (k) document.documentElement.style.setProperty('--k', k);
+      // 主题存在 localStorage 里，与 iframe 同源，所以先写再挂 iframe。
+      if (theme) {
+        try {
+          localStorage.setItem('nm405.theme', theme);
+        } catch {
+          /* 隐私模式下写不了，忽略 */
+        }
+      }
+      document.getElementById('f').src = path;
+    </script>
+  </body>
+</html>

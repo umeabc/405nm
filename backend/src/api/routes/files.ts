@@ -8,6 +8,7 @@ import { requireProjectAccess, requireProjectPermission, requireTeamAccess } fro
 import { env } from '../../env.js';
 import { AppError, badRequest, notFound } from '../../lib/errors.js';
 import { processImage } from '../../lib/image.js';
+import { extOf, mimeForExt } from '../../lib/mime.js';
 import { logOp } from '../../lib/oplog.js';
 import {
   IMAGE_VARIANTS,
@@ -33,16 +34,6 @@ import { clientIp, requireAuth } from '../guards.js';
  *  - 响应带 `immutable` 长缓存：同一个 id + variant 的内容永不改变
  *    （换图是新建修订版、得到新 id），所以浏览器可以放心长期缓存。
  */
-
-const MIME_BY_EXT: Readonly<Record<string, string>> = {
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.png': 'image/png',
-  '.webp': 'image/webp',
-  '.gif': 'image/gif',
-  '.avif': 'image/avif',
-  '.bmp': 'image/bmp',
-};
 
 const fileParam = z.object({ id: z.string().uuid('文件 ID 不合法') });
 const mediaParam = z.object({
@@ -389,9 +380,9 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       return reply.send();
     }
 
-    const ext = variant === 'raw' ? file.storageKey.slice(file.storageKey.lastIndexOf('.')) : '.webp';
+    const ext = variant === 'raw' ? extOf(file.storageKey) : '.webp';
     reply
-      .header('Content-Type', MIME_BY_EXT[ext.toLowerCase()] ?? 'application/octet-stream')
+      .header('Content-Type', mimeForExt(ext))
       .header('Content-Length', String(object.size))
       .header('Cache-Control', 'private, max-age=31536000, immutable')
       .header('ETag', etag)

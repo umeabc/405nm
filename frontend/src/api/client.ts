@@ -5,6 +5,8 @@
  * 两种情形都是同源请求，因此会话 Cookie 不需要任何跨域配置。
  */
 
+import type { PositionType } from '@405nm/shared';
+
 const BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api';
 
 export class ApiError extends Error {
@@ -550,9 +552,12 @@ export type TextStyle = {
 
 export type SourceRow = {
   id: string;
-  kind: 'box' | 'pin';
+  /** 框内 / 框外。由创建时的鼠标键位决定：左键 = 框内、右键 = 框外。 */
+  positionType: PositionType;
+  /** 归一化坐标 —— 标号是点，这里就是标记箭尖所指的那一点。 */
   x: number;
   y: number;
+  /** 只读的历史列：标号现在是点，这两个一律为 0。不要依赖。 */
   w: number;
   h: number;
   vertices: Array<[number, number]> | null;
@@ -784,9 +789,25 @@ export const authApi = {
     }),
 };
 
+/**
+ * 站点品牌 —— 后端已经把缺省值与立绘地址拼好了，前端直接渲染。
+ * 前端**不保留一份默认站名**：两边各写一份，改站名时必然漏掉一处。
+ */
+export type SiteBranding = {
+  name: string;
+  englishName: string;
+  slogan: string;
+  description: string;
+  footer: string;
+  hasMascot: boolean;
+  mascotUrl: string | null;
+};
+
 export const siteApi = {
-  settings: () =>
-    apiRequest<{ settings: Record<string, unknown> }>('/site/settings'),
+  /** 键值表的原样导出。要渲染用的品牌信息请用 `branding()`。 */
+  settings: () => apiRequest<{ settings: Record<string, unknown> }>('/site/settings'),
+
+  branding: () => apiRequest<{ branding: SiteBranding }>('/site/branding'),
 };
 
 export const permissionApi = {
@@ -917,7 +938,18 @@ export const adminApi = {
     apiRequest<{ settings: Record<string, unknown>; allowedKeys: string[] }>('/admin/settings'),
 
   saveSettings: (patch: Record<string, unknown>) =>
-    apiRequest<{ ok: true }>('/admin/settings', { method: 'PUT', body: patch }),
+    apiRequest<{ ok: true; branding: SiteBranding }>('/admin/settings', { method: 'PUT', body: patch }),
+
+  /** 立绘上传。走带进度的那条通道 —— 立绘经常是几 MB 的 PNG，没有进度条很像卡住了。 */
+  uploadMascot: (file: File, onProgress?: (loaded: number, total: number) => void) =>
+    uploadWithProgress<{ ok: true; branding: SiteBranding }>(
+      '/admin/settings/mascot',
+      file,
+      onProgress,
+    ),
+
+  clearMascot: () =>
+    apiRequest<{ ok: true; branding: SiteBranding }>('/admin/settings/mascot', { method: 'DELETE' }),
 
   notices: () => apiRequest<{ notices: NoticeRow[] }>('/admin/notices'),
 

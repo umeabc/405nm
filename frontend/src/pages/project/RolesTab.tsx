@@ -18,7 +18,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { ApiError, permissionApi, projectApi, type PermissionInfo, type ProjectRoleRow } from '../../api/client';
 import { PermissionPicker, groupPermissions } from '../../components/PermissionPicker';
-import { comiku } from '../../theme';
+import { palette } from '../../theme';
 import type { ProjectTabProps } from './index';
 
 /**
@@ -272,7 +272,7 @@ export function RolesTab({ detail, reload, can }: ProjectTabProps) {
           </Form.Item>
         </Form>
 
-        <Typography.Text type="secondary" style={{ fontSize: 11, color: comiku.inkSoft }}>
+        <Typography.Text type="secondary" style={{ fontSize: 11, color: palette.inkSoft }}>
           灰色且不可勾选的权限，是你自己也没有的 —— 不能把权限授到超出自己的范围。
         </Typography.Text>
       </Modal>

@@ -10,6 +10,7 @@ import { registerHealthRoutes } from './routes/health.js';
 import { registerInsightRoutes } from './routes/insights.js';
 import { registerMoveRoutes } from './routes/move.js';
 import { registerProjectRoutes } from './routes/projects.js';
+import { registerSiteRoutes } from './routes/site.js';
 import { registerSourceRoutes } from './routes/sources.js';
 import { registerTeamRoutes } from './routes/teams.js';
 import { registerTranslationRoutes } from './routes/translations.js';
@@ -79,6 +80,7 @@ export async function buildServer(): Promise<FastifyInstance> {
   await app.register(
     async (api) => {
       await registerHealthRoutes(api);
+      await registerSiteRoutes(api);
       await registerAuthRoutes(api);
       await registerTeamRoutes(api);
       await registerAdminRoutes(api);

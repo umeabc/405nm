@@ -42,7 +42,8 @@ export function StageChips({ value, onChange, counts = {} }: StageChipsProps) {
       value={value}
       onChange={(next) => onChange(next as StageKey | 'all')}
       options={options}
-      style={{ background: '#FFFFFF' }}
+      // 用变量而不是写死 #FFFFFF：暗色模式下写死白色就是一块刺眼的白板。
+      style={{ background: 'var(--nm-surface)' }}
     />
   );
 }

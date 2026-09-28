@@ -30,15 +30,22 @@ const sourceParam = z.object({
   sourceId: z.string().uuid('标号 ID 不合法'),
 });
 
+/**
+ * 标号的写入形态。
+ *
+ * **只有点，没有矩形** —— 这是对齐彩翻工作台之后的形态。`w` / `h` / `vertices`
+ * 三个列仍然留在表上（迁移期要如实存下旧站的多边形标注），但**不在这份 schema 里**：
+ * 它们成了只读的历史列，写入路径一律不碰。这样即便将来迁移工具写进了框，
+ * 工作台保存一次也不会把它抹平 —— 而如果把它们放进 schema 并给默认值 0，
+ * 每次画布整张提交都会把老数据的框清零，且没有任何提示。
+ */
 const sourceInputSchema = z.object({
   /** 已有标号带 id 表示更新；不带表示新建 */
   id: z.string().uuid().optional(),
-  kind: z.enum(['box', 'pin']).default('box'),
+  /** 框内 / 框外。不是几何判定，而是创建时由鼠标键位决定的分类。 */
+  positionType: z.enum(['in', 'out']).default('in'),
   x: z.number(),
   y: z.number(),
-  w: z.number().default(0),
-  h: z.number().default(0),
-  vertices: z.array(z.tuple([z.number(), z.number()])).nullish(),
   groupId: z.string().uuid().nullish(),
   orderIndex: z.number().int().min(0).max(100000).optional(),
   content: z.string().max(4000).default(''),
@@ -52,15 +59,9 @@ const saveSchema = z.object({
   replace: z.boolean().default(false),
 });
 
-/** 夹紧坐标。返回值一定落在 [0,1]；宽高只限绝对值，因为框可以越过图片右边界的一部分。 */
-function normalizeGeometry<T extends { x: number; y: number; w: number; h: number }>(input: T): T {
-  return {
-    ...input,
-    x: clamp01(input.x),
-    y: clamp01(input.y),
-    w: Math.max(-1, Math.min(1, input.w)),
-    h: Math.max(-1, Math.min(1, input.h)),
-  };
+/** 夹紧坐标。标号必须落在画布内 —— 画布外的元素是「看不见但选得中」，最难排查。 */
+function normalizeGeometry<T extends { x: number; y: number }>(input: T): T {
+  return { ...input, x: clamp01(input.x), y: clamp01(input.y) };
 }
 
 export async function registerSourceRoutes(app: FastifyInstance): Promise<void> {
@@ -105,13 +106,11 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
 
       for (const input of body.sources) {
         const geometry = normalizeGeometry(input);
+        // 刻意**不含** w / h / vertices：那三列是只读的历史列（见 sourceInputSchema 的注释）。
         const values = {
-          kind: geometry.kind,
+          positionType: geometry.positionType,
           x: geometry.x,
           y: geometry.y,
-          w: geometry.w,
-          h: geometry.h,
-          vertices: (input.vertices ?? null) as never,
           groupId: input.groupId ?? null,
           content: input.content,
           note: input.note,
@@ -165,12 +164,9 @@ export async function registerSourceRoutes(app: FastifyInstance): Promise<void> 
       .insert(sources)
       .values({
         fileId,
-        kind: input.kind,
+        positionType: input.positionType,
         x: input.x,
         y: input.y,
-        w: input.w,
-        h: input.h,
-        vertices: (input.vertices ?? null) as never,
         groupId: input.groupId ?? null,
         orderIndex: input.orderIndex ?? (await nextOrderIndex(db, fileId)),
         content: input.content,
@@ -264,9 +260,11 @@ async function advanceToTranslatingIfSourced(
 function serializeSource(row: typeof sources.$inferSelect) {
   return {
     id: row.id,
-    kind: row.kind,
+    positionType: row.positionType,
     x: row.x,
     y: row.y,
+    // 只读的历史列：标号现在是点，w/h 一律 0、vertices 一般为 null。
+    // 仍然下发是为了迁移期的数据可查，客户端不应当依赖它们。
     w: row.w,
     h: row.h,
     vertices: row.vertices ?? null,

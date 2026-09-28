@@ -3,7 +3,7 @@ import { Badge, Button, Empty, List, Popover, Segmented, Space, Tag, Typography 
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { notificationApi, noticeApi, type NoticeRow, type NotificationRow } from '../api/client';
-import { comiku } from '../theme';
+import { palette } from '../theme';
 import { timeAgo } from '../utils/time';
 
 /**
@@ -107,7 +107,7 @@ export function NotificationBell() {
                 <Space direction="vertical" size={2} style={{ width: '100%' }}>
                   <Space size={6}>
                     {!item.read ? (
-                      <Tag color={comiku.primary} style={{ marginInlineEnd: 0 }}>
+                      <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
                         新
                       </Tag>
                     ) : null}
@@ -138,7 +138,7 @@ export function NotificationBell() {
               <Space direction="vertical" size={2} style={{ width: '100%' }}>
                 <Space size={6}>
                   {!item.read ? (
-                    <Tag color={comiku.primary} style={{ marginInlineEnd: 0 }}>
+                    <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
                       新
                     </Tag>
                   ) : null}

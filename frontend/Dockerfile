@@ -7,7 +7,8 @@
 # 在 Windows 上构建再上传完全没有问题 —— 这正是彩翻/380nm 现用的流程，
 # 也避开了远程机器内存不足构建 OOM 的问题。
 #
-# 反过来，**后端不能这么干**：它的原生依赖（sharp）必须在 Linux 容器内安装。
+# 反过来，**后端不能这么干**：它要调 Debian 的 libvips 命令行（见 backend/Dockerfile），
+# 而且 Windows 上装好的 node_modules 传过去必崩。
 
 FROM nginx:1.26
 

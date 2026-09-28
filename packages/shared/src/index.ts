@@ -12,20 +12,31 @@ export { naturalCompare, naturalSortKey, sortByNatural } from './natural-sort.js
 export {
   DEFAULT_FONT_SIZE_RATIO,
   DEFAULT_TEXT_STYLE,
+  POSITION_TYPES,
   annotationRect,
   clamp01,
-  hitTest,
   layoutAnnotation,
   layoutText,
   resolveStyle,
   type Annotation,
-  type AnnotationKind,
   type LaidOutText,
   type LayoutInput,
+  type PositionType,
   type Rect,
   type TextAlign,
   type TextStyle,
 } from './annotation.js';
+
+export {
+  MARKER_ARROW_HEIGHT,
+  MARKER_ARROW_WIDTH,
+  MARKER_CENTER_DY,
+  MARKER_FONT_FAMILY,
+  MARKER_FONT_SIZE,
+  MARKER_RADIUS,
+  hitTestMarker,
+  type MarkerAnchor,
+} from './marker.js';
 
 export {
   TATE_CHU_YOKO_MAX,

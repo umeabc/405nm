@@ -3,7 +3,8 @@ import { Avatar, Dropdown, Layout, Menu, Space, Typography } from 'antd';
 import { useMemo, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
-import { comiku } from '../theme';
+import { useBranding } from '../hooks/useBranding';
+import { palette } from '../theme';
 import { NotificationBell } from './NotificationBell';
 
 export type AppShellProps = {
@@ -18,6 +19,7 @@ function initialOf(name: string): string {
 
 export function AppShell({ dark, onToggleDark, children }: AppShellProps) {
   const { user, logout } = useAuth();
+  const branding = useBranding();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -45,14 +47,16 @@ export function AppShell({ dark, onToggleDark, children }: AppShellProps) {
         style={{
           display: 'flex',
           alignItems: 'center',
-          borderBottom: `1px solid ${dark ? '#3A3230' : comiku.border}`,
+          borderBottom: `1px solid ${dark ? '#3A3230' : palette.border}`,
           position: 'sticky',
           top: 0,
           zIndex: 10,
         }}
       >
         <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 18, fontWeight: 700, color: comiku.primary }}>405nm</span>
+          <span style={{ fontSize: 18, fontWeight: 700, color: palette.primary }}>
+            {branding.name}
+          </span>
         </Link>
 
         <Menu
@@ -96,7 +100,7 @@ export function AppShell({ dark, onToggleDark, children }: AppShellProps) {
             <Space style={{ cursor: 'pointer', padding: '0 4px' }} size={8}>
               <Avatar
                 size={28}
-                style={{ background: comiku.primary, fontSize: 13 }}
+                style={{ background: palette.primary, fontSize: 13 }}
                 src={user?.avatarKey ?? undefined}
               >
                 {user ? initialOf(user.displayName) : '?'}
@@ -141,6 +145,49 @@ export function PageHeader({
         <Typography.Title level={3} style={{ marginBottom: 4 }}>
           {title}
         </Typography.Title>
+        {description ? (
+          <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+            {description}
+          </Typography.Text>
+        ) : null}
+      </div>
+      {extra}
+    </div>
+  );
+}
+
+/**
+ * 彩翻风格的页面标题（对应它的 `ContentTitle`）：**18px 加粗、主色、下边距 15px**。
+ *
+ * 与 `PageHeader` 并存而不是二选一：`PageHeader` 是「页面名 + 说明」的通用排版，
+ * 字号大、颜色中性；`ContentTitle` 是彩翻仪表盘的那种「一行主色标题」。
+ * 目前只有工作台（首页）用它 —— 用户明确要求只有首页与登录页对齐彩翻，
+ * 其余页面的标题保持原样。
+ */
+export function ContentTitle({
+  title,
+  description,
+  extra,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  extra?: ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'flex-end',
+        gap: 16,
+        marginBottom: 15,
+        flexWrap: 'wrap',
+      }}
+    >
+      <div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: palette.primary, lineHeight: 1.4 }}>
+          {title}
+        </div>
         {description ? (
           <Typography.Text type="secondary" style={{ fontSize: 13 }}>
             {description}

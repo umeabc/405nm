@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, teamApi, type TeamSummary } from '../api/client';
 import { PageHeader } from '../components/AppShell';
-import { comiku } from '../theme';
+import { palette } from '../theme';
 
 export default function TeamsPage() {
   const navigate = useNavigate();
@@ -86,7 +86,7 @@ export default function TeamsPage() {
                 <Space direction="vertical" size={6} style={{ width: '100%' }}>
                   <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                     <Typography.Text strong>{team.name}</Typography.Text>
-                    <Tag color={comiku.primary} style={{ marginInlineEnd: 0 }}>
+                    <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
                       {team.myRole.name}
                     </Tag>
                   </Space>

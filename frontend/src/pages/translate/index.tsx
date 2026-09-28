@@ -21,6 +21,7 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import type { PositionType } from '@405nm/shared';
 import {
   ApiError,
   fileApi,
@@ -31,8 +32,8 @@ import {
   type ProjectFileRow,
   type SourceWithTranslations,
 } from '../../api/client';
-import { comiku } from '../../theme';
-import { Canvas, type CanvasTextMode, type CanvasTool } from './Canvas';
+import { palette } from '../../theme';
+import { Canvas, MARKER_FILL, type CanvasTextMode } from './Canvas';
 import { SourcePanel } from './SourcePanel';
 import { CreditsBar } from '../../components/CreditsBar';
 
@@ -69,7 +70,6 @@ export default function TranslatePage() {
 
   const [targetId, setTargetId] = useState<string>('');
   const [mode, setMode] = useState<Mode>('translate');
-  const [tool, setTool] = useState<CanvasTool>('select');
   const [textMode, setTextMode] = useState<CanvasTextMode>('translation');
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -77,11 +77,14 @@ export default function TranslatePage() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [sourceDrafts, setSourceDrafts] = useState<Record<string, string>>({});
   /**
-   * 几何改动也攒着一起提交。标号拖动很频繁，逐个提交会打出一串请求，
+   * 坐标与框内/框外的改动也攒着一起提交。标号拖动很频繁，逐个提交会打出一串请求，
    * 而它们的到达顺序不保证 —— 最后落库的可能是较早的那次。
    */
-  const [geometry, setGeometry] = useState<Record<string, { x: number; y: number; w: number; h: number }>>({});
-  const [newSources, setNewSources] = useState<Array<{ tempId: string; rect: { x: number; y: number; w: number; h: number }; kind: 'box' | 'pin' }>>([]);
+  const [geometry, setGeometry] = useState<Record<string, { x: number; y: number }>>({});
+  const [positionDrafts, setPositionDrafts] = useState<Record<string, PositionType>>({});
+  const [newSources, setNewSources] = useState<
+    Array<{ tempId: string; point: { x: number; y: number }; positionType: PositionType }>
+  >([]);
 
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
@@ -170,7 +173,11 @@ export default function TranslatePage() {
     if (!workbench || !targetId) return true;
 
     const hasTextChanges = Object.keys(drafts).length > 0 && dirty;
-    const hasGeometryChanges = Object.keys(geometry).length > 0 || newSources.length > 0 || Object.keys(sourceDrafts).length > 0;
+    const hasGeometryChanges =
+      Object.keys(geometry).length > 0 ||
+      Object.keys(positionDrafts).length > 0 ||
+      Object.keys(sourceDrafts).length > 0 ||
+      newSources.length > 0;
     if (!hasTextChanges && !hasGeometryChanges) {
       setDirty(false);
       return true;
@@ -178,19 +185,16 @@ export default function TranslatePage() {
 
     setSaving(true);
     try {
-      // ① 先保存标号几何与原文 —— 新标号必须先拿到服务端 id，
+      // ① 先保存标号坐标与原文 —— 新标号必须先拿到服务端 id，
       //    否则紧接着的译文保存没有 sourceId 可挂。
       if (hasGeometryChanges) {
-        const existing = mergeSources(workbench.sources, geometry, sourceDrafts);
+        const existing = mergeSources(workbench.sources, geometry, sourceDrafts, positionDrafts);
         const payload = [
           ...existing.map((s) => ({
             id: s.id,
-            kind: s.kind,
+            positionType: s.positionType,
             x: s.x,
             y: s.y,
-            w: s.w,
-            h: s.h,
-            vertices: s.vertices,
             groupId: s.groupId,
             orderIndex: s.orderIndex,
             content: s.content,
@@ -198,11 +202,9 @@ export default function TranslatePage() {
             style: s.style,
           })),
           ...newSources.map((s) => ({
-            kind: s.kind,
-            x: s.rect.x,
-            y: s.rect.y,
-            w: s.rect.w,
-            h: s.rect.h,
+            positionType: s.positionType,
+            x: s.point.x,
+            y: s.point.y,
             content: '',
             note: '',
             style: {},
@@ -226,6 +228,7 @@ export default function TranslatePage() {
         }
 
         setGeometry({});
+        setPositionDrafts({});
         setNewSources([]);
         setSourceDrafts({});
         setDrafts(migrated);
@@ -265,7 +268,7 @@ export default function TranslatePage() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workbench, targetId, drafts, geometry, newSources, sourceDrafts, dirty, mode, fileId, message, load]);
+  }, [workbench, targetId, drafts, geometry, positionDrafts, newSources, sourceDrafts, dirty, mode, fileId, message, load]);
 
   // ── 键盘 ──────────────────────────────────────────────────
   useEffect(() => {
@@ -292,7 +295,8 @@ export default function TranslatePage() {
       if (event.key === 'Delete' && selectedId) {
         void removeSource(selectedId);
       }
-      if (event.key === 'Escape') setTool('select');
+      // 画布上点空白就是新建标号，所以没法靠「点空白」来取消选中 —— Esc 补上这一下。
+      if (event.key === 'Escape') setSelectedId(null);
     };
 
     window.addEventListener('keydown', onKey);
@@ -319,16 +323,21 @@ export default function TranslatePage() {
   };
 
   // ── 标号操作 ──────────────────────────────────────────────
-  const createSource = (rect: { x: number; y: number; w: number; h: number }, kind: 'box' | 'pin') => {
+  const createSource = (point: { x: number; y: number }, positionType: PositionType) => {
     const tempId = `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    setNewSources((list) => [...list, { tempId, rect, kind }]);
+    setNewSources((list) => [...list, { tempId, point, positionType }]);
     setDrafts((prev) => ({ ...prev, [tempId]: '' }));
     setSelectedId(tempId);
     setDirty(true);
   };
 
-  const changeGeometry = (id: string, rect: { x: number; y: number; w: number; h: number }) => {
-    setGeometry((prev) => ({ ...prev, [id]: rect }));
+  const changeGeometry = (id: string, point: { x: number; y: number }) => {
+    setGeometry((prev) => ({ ...prev, [id]: point }));
+    setDirty(true);
+  };
+
+  const changePositionType = (id: string, positionType: PositionType) => {
+    setPositionDrafts((prev) => ({ ...prev, [id]: positionType }));
     setDirty(true);
   };
 
@@ -356,23 +365,23 @@ export default function TranslatePage() {
 
   // 画布与列表要看到「本地尚未保存的改动」，否则用户改了坐标却看不到变化。
   const displaySources = useMemo(
-    () => mergeSources(workbench?.sources ?? [], geometry, sourceDrafts),
-    [workbench, geometry, sourceDrafts],
+    () => mergeSources(workbench?.sources ?? [], geometry, sourceDrafts, positionDrafts),
+    [workbench, geometry, sourceDrafts, positionDrafts],
   );
 
   /**
-   * 画布与右侧列表看的是**同一份**数据：服务端已有的标号 + 尚未保存的新框。
-   * 合成一处而不是各算一份 —— 两份一旦不同步，就会出现「画布上有这个框、
+   * 画布与右侧列表看的是**同一份**数据：服务端已有的标号 + 尚未保存的新标号。
+   * 合成一处而不是各算一份 —— 两份一旦不同步，就会出现「画布上有这个点、
    * 右侧列表里没有」这种让人怀疑自己操作错了的现象。
    */
   const viewSources: SourceWithTranslations[] = useMemo(() => {
     const pending: SourceWithTranslations[] = newSources.map((item, i) => ({
       id: item.tempId,
-      kind: item.kind,
-      x: item.rect.x,
-      y: item.rect.y,
-      w: item.rect.w,
-      h: item.rect.h,
+      positionType: item.positionType,
+      x: item.point.x,
+      y: item.point.y,
+      w: 0,
+      h: 0,
       vertices: null,
       groupId: null,
       orderIndex: displaySources.length + i,
@@ -468,7 +477,7 @@ export default function TranslatePage() {
             </Typography.Text>
           </Tooltip>
 
-          <Tag color={comiku.primary} style={{ marginInlineEnd: 0 }}>
+          <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
             {scoreLabel(file.state)}
           </Tag>
 
@@ -570,19 +579,19 @@ export default function TranslatePage() {
 
       <div className="nm-translate-body">
         <div className="nm-translate-canvas">
-          <Space size={4} style={{ marginBottom: 8 }}>
-            <Segmented
-              size="small"
-              value={tool}
-              onChange={(value) => setTool(value as CanvasTool)}
-              options={[
-                { label: '选择', value: 'select' },
-                { label: '框', value: 'box' },
-                { label: '点', value: 'pin' },
-              ]}
-            />
+          {/* 没有「工具」这个概念了 —— 新建标号全靠鼠标键位，所以键位说明
+              必须常驻在画布上方。左键/右键的区别是记不住的，得看得见。 */}
+          <Space size={12} style={{ marginBottom: 8 }} wrap>
+            <span className="nm-marker-legend">
+              <i style={{ background: MARKER_FILL.in }} />
+              左键点画面 = 框内
+            </span>
+            <span className="nm-marker-legend">
+              <i style={{ background: MARKER_FILL.out }} />
+              右键点画面 = 框外
+            </span>
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              Ctrl+滚轮缩放 · ←/→ 翻页 · Delete 删除选中
+              拖动标记可移动 · Ctrl+滚轮缩放 · ←/→ 翻页 · Delete 删除选中 · Esc 取消选中
             </Typography.Text>
           </Space>
 
@@ -593,10 +602,9 @@ export default function TranslatePage() {
             sources={viewSources}
             textMode={textMode}
             selectedId={selectedId}
-            tool={tool}
             onSelect={setSelectedId}
-            onCreate={createSource}
-            onGeometryChange={changeGeometry}
+            onCreate={canEdit ? createSource : () => undefined}
+            onGeometryChange={canEdit ? changeGeometry : () => undefined}
             showHint={canEdit}
           />
         </div>
@@ -613,6 +621,7 @@ export default function TranslatePage() {
             selectedId={selectedId}
             onSelect={setSelectedId}
             onDelete={(id) => void removeSource(id)}
+            onPositionTypeChange={canEdit ? changePositionType : () => undefined}
             canEditSource={my.canTranslate || my.canCheck}
             onSourceTextChange={(id, value) => {
               setSourceDrafts((prev) => ({ ...prev, [id]: value }));
@@ -627,20 +636,23 @@ export default function TranslatePage() {
   );
 }
 
-/** 把本地未提交的几何与原文合并进服务端数据，让画布立刻反映改动。 */
+/** 把本地未提交的坐标、框内/框外与原文合并进服务端数据，让画布立刻反映改动。 */
 function mergeSources(
   sources: SourceWithTranslations[],
-  geometry: Record<string, { x: number; y: number; w: number; h: number }>,
+  geometry: Record<string, { x: number; y: number }>,
   sourceDrafts: Record<string, string>,
+  positionDrafts: Record<string, PositionType>,
 ): SourceWithTranslations[] {
   return sources.map((source) => {
-    const rect = geometry[source.id];
+    const point = geometry[source.id];
     const text = sourceDrafts[source.id];
-    if (!rect && text === undefined) return source;
+    const positionType = positionDrafts[source.id];
+    if (!point && text === undefined && positionType === undefined) return source;
     return {
       ...source,
-      ...(rect ?? {}),
+      ...(point ?? {}),
       ...(text !== undefined ? { content: text } : {}),
+      ...(positionType !== undefined ? { positionType } : {}),
     };
   });
 }

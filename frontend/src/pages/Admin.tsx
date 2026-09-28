@@ -1,4 +1,10 @@
-import { DeleteOutlined, PlusOutlined, ReloadOutlined, UserAddOutlined } from '@ant-design/icons';
+import {
+  DeleteOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  UploadOutlined,
+  UserAddOutlined,
+} from '@ant-design/icons';
 import {
   App as AntApp,
   Button,
@@ -8,6 +14,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Progress,
   Row,
   Space,
   Switch,
@@ -15,13 +22,15 @@ import {
   Tabs,
   Tag,
   Typography,
+  Upload,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, adminApi, type NoticeRow, type PublicUser } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { PageHeader } from '../components/AppShell';
-import { comiku } from '../theme';
+import { invalidateBranding, useBranding } from '../hooks/useBranding';
+import { palette } from '../theme';
 
 const STATUS_LABEL: Record<string, { text: string; color: string }> = {
   active: { text: '正常', color: 'green' },
@@ -128,7 +137,7 @@ function UsersTab() {
         <Space direction="vertical" size={0}>
           <Space size={6}>
             <Typography.Text>{row.displayName}</Typography.Text>
-            {row.isSiteAdmin ? <Tag color={comiku.primary}>站点管理员</Tag> : null}
+            {row.isSiteAdmin ? <Tag color={palette.primary}>站点管理员</Tag> : null}
             {row.id === me?.id ? <Tag>我</Tag> : null}
           </Space>
           <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -360,7 +369,9 @@ function SettingsTab() {
         const value = values[field.key];
         if (value !== undefined) patch[field.key] = value;
       }
-      await adminApi.saveSettings(patch);
+      const res = await adminApi.saveSettings(patch);
+      // 站名与标语也出现在顶栏和登录页上，改完立刻广播，否则要刷新才看得到。
+      invalidateBranding(res.branding);
       message.success('已保存');
     } catch (err) {
       message.error(err instanceof ApiError ? err.message : '保存失败');
@@ -385,7 +396,117 @@ function SettingsTab() {
           保存
         </Button>
       </Form>
+
+      <MascotCard />
     </Card>
+  );
+}
+
+/**
+ * 站点立绘。
+ *
+ * **独立成一张卡、选中即上传**，不并进上面那个表单：上面是一组文本框、按「保存」提交，
+ * 立绘是一张图、选完就该立刻生效。放进同一个表单会让人以为它也要点保存才生效，
+ * 表现是「传了图、没点保存、以为坏了」。
+ */
+function MascotCard() {
+  const { message } = AntApp.useApp();
+  const branding = useBranding();
+  const [busy, setBusy] = useState(false);
+  const [percent, setPercent] = useState<number | null>(null);
+
+  async function upload(file: File) {
+    setBusy(true);
+    setPercent(0);
+    try {
+      const res = await adminApi.uploadMascot(file, (loaded, total) => {
+        setPercent(total > 0 ? Math.round((loaded / total) * 100) : 0);
+      });
+      invalidateBranding(res.branding);
+      message.success('立绘已更新');
+    } catch (err) {
+      message.error(err instanceof ApiError ? err.message : '上传失败');
+    } finally {
+      setBusy(false);
+      setPercent(null);
+    }
+  }
+
+  async function clear() {
+    setBusy(true);
+    try {
+      const res = await adminApi.clearMascot();
+      invalidateBranding(res.branding);
+      message.success('已清除立绘');
+    } catch (err) {
+      message.error(err instanceof ApiError ? err.message : '清除失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 20, paddingTop: 20, borderTop: `1px solid ${palette.border}` }}>
+      <Typography.Title level={5} style={{ marginTop: 0 }}>
+        站点立绘
+      </Typography.Title>
+
+      <Space align="start" size={20} wrap>
+        <div
+          style={{
+            width: 140,
+            height: 180,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            borderRadius: 10,
+            border: `1px dashed ${palette.borderStrong}`,
+            background: palette.paper,
+            overflow: 'hidden',
+          }}
+        >
+          {branding.mascotUrl ? (
+            <img
+              src={branding.mascotUrl}
+              alt="站点立绘"
+              style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+            />
+          ) : (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              未设置
+            </Typography.Text>
+          )}
+        </div>
+
+        <Space direction="vertical" size={8} style={{ maxWidth: 340 }}>
+          <Upload
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            showUploadList={false}
+            // 返回 false 拦住 antd 自己的上传：我们要用带进度的通道，
+            // 而且失败时要拿到 ApiError 的中文提示，不是 antd 的通用文案。
+            beforeUpload={(file) => {
+              void upload(file as unknown as File);
+              return false;
+            }}
+          >
+            <Button icon={<UploadOutlined />} loading={busy} disabled={busy}>
+              {branding.hasMascot ? '更换立绘' : '上传立绘'}
+            </Button>
+          </Upload>
+
+          {percent !== null ? <Progress percent={percent} size="small" /> : null}
+
+          <Button danger size="small" disabled={busy || !branding.hasMascot} onClick={clear}>
+            清除立绘
+          </Button>
+
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            显示在登录页左侧。建议用透明底 PNG，高度 400–800px；<br />
+            尺寸不匹配也不会拉伸，按原比例内接显示。
+          </Typography.Text>
+        </Space>
+      </Space>
+    </div>
   );
 }
 

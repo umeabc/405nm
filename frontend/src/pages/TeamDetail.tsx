@@ -44,7 +44,7 @@ import {
 import { PageHeader } from '../components/AppShell';
 import { PermissionPicker, groupPermissions } from '../components/PermissionPicker';
 import { useAuth } from '../auth/AuthContext';
-import { comiku } from '../theme';
+import { palette } from '../theme';
 import { TeamProjectsTab } from './team/ProjectsTab';
 
 export default function TeamDetailPage() {
@@ -115,7 +115,7 @@ export default function TeamDetailPage() {
         description={detail?.team.intro || undefined}
         extra={
           <Space>
-            <Tag color={comiku.primary} style={{ marginInlineEnd: 0 }}>
+            <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
               {detail?.my.isSiteAdmin ? '站点管理员' : (detail?.my.role?.name ?? '—')}
             </Tag>
           </Space>

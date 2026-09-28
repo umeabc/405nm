@@ -3,7 +3,7 @@ import { App as AntApp, Button, Card, Form, Input, Modal, Popconfirm, Select, Sp
 import type { ColumnsType } from 'antd/es/table';
 import { useEffect, useState } from 'react';
 import { ApiError, projectApi, type LanguageOption, type ProjectTarget } from '../../api/client';
-import { comiku } from '../../theme';
+import { palette } from '../../theme';
 import type { ProjectTabProps } from './index';
 
 /**
@@ -54,7 +54,7 @@ export function TargetsTab({ detail, reload, can }: ProjectTabProps) {
       key: 'language',
       render: (_, row) => (
         <Space size={8}>
-          <Tag color={comiku.primary} style={{ marginInlineEnd: 0 }}>
+          <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
             {row.label}
           </Tag>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>

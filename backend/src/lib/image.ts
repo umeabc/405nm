@@ -153,6 +153,43 @@ async function renderVariant(input: string, output: string, maxEdge: number, qua
 }
 
 /**
+ * 只验证「这确实是一张能解析的图片」，不生成变体、不落库。
+ *
+ * 给立绘这类「存原图就够」的场景用。它**仍然走同一个并发闸门** ——
+ * 闸门护的是 libvips 的解码峰值内存，绕开它会让「上传大图的同时传立绘」
+ * 变成双倍峰值，而那正是要防的事。
+ */
+export async function probeImage(
+  buffer: Buffer,
+): Promise<{ width: number; height: number; format: string }> {
+  if (buffer.byteLength === 0) throw badRequest('文件内容为空', 'EMPTY_FILE');
+
+  return gate.run(async () => {
+    const workDir = path.join(os.tmpdir(), `nm405-probe-${randomUUID()}`);
+    await fs.mkdir(workDir, { recursive: true });
+    const source = path.join(workDir, 'source');
+
+    try {
+      await fs.writeFile(source, buffer);
+      const meta = await probe(source);
+      if (!ALLOWED_LOADERS.has(meta.loader)) {
+        throw badRequest(`不支持的文件类型：${meta.loader || '未知'}`, 'UNSUPPORTED_IMAGE');
+      }
+      return {
+        width: meta.width,
+        height: meta.height,
+        format: FORMAT_BY_LOADER[meta.loader] ?? meta.loader,
+      };
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw badRequest('图片解析失败，文件可能已损坏', 'UNSUPPORTED_IMAGE');
+    } finally {
+      await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+}
+
+/**
  * 处理一张图：校验 → 探测 → 摘要 → 生成两个变体。
  *
  * 尺寸取**应用 EXIF 方向之后**的值。手机直出的照片与部分扫图带方向标记，

@@ -12,7 +12,13 @@
  * 后续 M2+ 的接口验证继续往这里加分组。
  */
 
+import { makePng } from './lib/png.mjs';
+
 const BASE = (process.argv[2] ?? 'http://backend:3000/api').replace(/\/$/, '');
+
+/** 去掉 `/api` 前缀的原站地址。立绘地址是后端下发的绝对路径（`/api/...`），
+ *  拼接时不能再带一次 `/api`。 */
+const ORIGIN = BASE.replace(/\/api$/, '');
 
 const ADMIN_USERNAME = process.env.M1_ADMIN_USERNAME ?? 'admin';
 const ADMIN_PASSWORD = process.env.M1_ADMIN_PASSWORD ?? '';
@@ -52,11 +58,7 @@ class Client {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
 
-    const setCookie = res.headers.getSetCookie?.() ?? [];
-    for (const raw of setCookie) {
-      const pair = raw.split(';')[0];
-      if (pair) this.cookie = pair;
-    }
+    this.absorbCookies(res);
 
     const text = await res.text();
     let json = null;
@@ -65,7 +67,30 @@ class Client {
     } catch {
       json = { raw: text };
     }
-    return { status: res.status, body: json };
+    return { status: res.status, body: json, headers: res.headers };
+  }
+
+  /** multipart 上传。**不手写 Content-Type** —— 让 fetch 自己带 boundary。 */
+  async postForm(path, parts) {
+    const form = new FormData();
+    for (const [name, value, filename] of parts) form.append(name, value, filename);
+
+    const res = await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: this.cookie ? { cookie: this.cookie } : {},
+      body: form,
+    });
+
+    this.absorbCookies(res);
+
+    const text = await res.text();
+    let json = null;
+    try {
+      json = text ? JSON.parse(text) : null;
+    } catch {
+      json = { raw: text };
+    }
+    return { status: res.status, body: json, headers: res.headers };
   }
 
   get = (p) => this.request('GET', p);
@@ -74,6 +99,14 @@ class Client {
   put = (p, b) => this.request('PUT', p, b);
   del = (p) => this.request('DELETE', p);
 }
+
+/** 会话 Cookie 是「最后一个赢」：登录会写新 token，登出会清空。 */
+Client.prototype.absorbCookies = function absorbCookies(res) {
+  for (const raw of res.headers.getSetCookie?.() ?? []) {
+    const pair = raw.split(';')[0];
+    if (pair) this.cookie = pair;
+  }
+};
 
 const admin = new Client('admin');
 const member = new Client('member');
@@ -282,6 +315,119 @@ record('后台', '站点设置可公开读取（登录页要用）', publicSetti
 
 const nonAdminSettings = await member.put('/admin/settings', { 'site.name': 'HACKED' });
 record('后台', '非站点管理员不能改站点设置（403）', nonAdminSettings.status === 403, `HTTP ${nonAdminSettings.status}`);
+
+// ── 站点品牌与立绘（登录页在未登录状态下就要渲染这些）────────
+
+const brandingAnon = await anon.get('/site/branding');
+record(
+  '品牌',
+  '品牌信息可匿名读取',
+  brandingAnon.status === 200 &&
+    typeof brandingAnon.body?.branding?.name === 'string' &&
+    brandingAnon.body.branding.name !== '',
+  `HTTP ${brandingAnon.status} ${JSON.stringify(brandingAnon.body)}`,
+);
+
+const renamed = await admin.put('/admin/settings', {
+  'site.name': `验证站-${RUN_ID}`,
+  'site.slogan': '验证标语',
+});
+record('品牌', '站名与标语可写', renamed.status === 200, `HTTP ${renamed.status}`);
+
+const brandingRenamed = await anon.get('/site/branding');
+record(
+  '品牌',
+  '改名后公开品牌信息立即反映（缺省值由后端补齐）',
+  brandingRenamed.body?.branding?.name === `验证站-${RUN_ID}` &&
+    brandingRenamed.body?.branding?.slogan === '验证标语',
+  JSON.stringify(brandingRenamed.body?.branding),
+);
+
+// ⚠️ 立刻改回去。站点名会显示在所有页面的顶栏与登录页上，
+// 留着「验证站-xxx」会让下一次部署后走查的人以为站点名坏了 ——
+// 这个坑就是第一次跑这个脚本时踩到的。
+const restored = await admin.put('/admin/settings', { 'site.name': '405nm', 'site.slogan': '' });
+record('品牌', '验证用的站名与标语用完即还原', restored.status === 200, `HTTP ${restored.status}`);
+
+// 立绘的存储键**不在可写白名单**里 —— 它是服务端生成的对象名。
+// 若能被通用设置接口改写，一次误填就能让立绘指向任意存储键。
+const hijack = await admin.put('/admin/settings', { 'site.mascotKey': '../files/whatever.png' });
+record(
+  '品牌',
+  '立绘存储键不能经通用设置接口改写（400）',
+  hijack.status === 400,
+  `HTTP ${hijack.status} ${JSON.stringify(hijack.body)}`,
+);
+
+// 清一次再断言 404：上一轮跑留下的立绘会让「未配置」的前提不成立。
+await admin.del('/admin/settings/mascot');
+const noMascot = await anon.get('/site/branding/mascot');
+record('品牌', '未配置立绘时返回 404（前端据此回落字标）', noMascot.status === 404, `HTTP ${noMascot.status}`);
+
+const mascotByMember = await member.postForm('/admin/settings/mascot', [
+  ['file', new Blob([makePng(40, 40)], { type: 'image/png' }), 'mascot.png'],
+]);
+record('品牌', '非站点管理员不能上传立绘（403）', mascotByMember.status === 403, `HTTP ${mascotByMember.status}`);
+
+// 扩展名是客户端说了算的，后端必须真的解一次。这条路由吐出的字节是
+// **公开可读**的，一个改名成 .png 的可执行文件被原样存下并对外提供，
+// 比作品图片被误传严重得多。
+const fakeImage = await admin.postForm('/admin/settings/mascot', [
+  ['file', new Blob([Buffer.from('definitely not a png')], { type: 'image/png' }), 'evil.png'],
+]);
+record(
+  '品牌',
+  '伪装成 PNG 的非图片被拒（400 UNSUPPORTED_IMAGE）',
+  fakeImage.status === 400 && fakeImage.body?.error === 'UNSUPPORTED_IMAGE',
+  `HTTP ${fakeImage.status} ${JSON.stringify(fakeImage.body)}`,
+);
+
+const mascotBytes = makePng(60, 90);
+const uploadMascot = await admin.postForm('/admin/settings/mascot', [
+  ['file', new Blob([mascotBytes], { type: 'image/png' }), 'mascot.png'],
+]);
+record(
+  '品牌',
+  '站点管理员可上传立绘',
+  uploadMascot.status === 200 &&
+    uploadMascot.body?.branding?.hasMascot === true &&
+    typeof uploadMascot.body?.branding?.mascotUrl === 'string',
+  `HTTP ${uploadMascot.status} ${JSON.stringify(uploadMascot.body?.branding)}`,
+);
+
+const mascotUrl = uploadMascot.body?.branding?.mascotUrl ?? '';
+// 立绘换了之后路径不变，不带版本号浏览器会一直用缓存里的旧图，
+// 表现是「后台上传成功了但页面上没变」。
+record('品牌', '立绘地址带版本号（换图后不会命中旧缓存）', mascotUrl.includes('?v='), mascotUrl);
+
+const mascotRes = await fetch(`${ORIGIN}${mascotUrl}`);
+const servedBytes = Buffer.from(await mascotRes.arrayBuffer());
+record(
+  '品牌',
+  '立绘字节可公开读取，且与上传内容逐字节一致',
+  mascotRes.status === 200 &&
+    mascotRes.headers.get('content-type') === 'image/png' &&
+    servedBytes.equals(mascotBytes),
+  `HTTP ${mascotRes.status} ${mascotRes.headers.get('content-type')} ${servedBytes.length}B`,
+);
+
+const revalidated = await fetch(`${ORIGIN}${mascotUrl}`, {
+  headers: { 'if-none-match': mascotRes.headers.get('etag') ?? '' },
+});
+record('品牌', '立绘带 ETag，命中返 304', revalidated.status === 304, `HTTP ${revalidated.status}`);
+
+const cleared = await admin.del('/admin/settings/mascot');
+record(
+  '品牌',
+  '可清除立绘（引用与字节一起失效）',
+  cleared.status === 200 &&
+    cleared.body?.branding?.hasMascot === false &&
+    cleared.body?.branding?.mascotUrl === null,
+  `HTTP ${cleared.status}`,
+);
+
+const mascotGone = await anon.get('/site/branding/mascot');
+record('品牌', '清除后立绘不再可读（404）', mascotGone.status === 404, `HTTP ${mascotGone.status}`);
 
 const notice = await admin.post('/admin/notices', { title: 'M1 验证', content: '这是一条自动验证公告' });
 record('后台', '可发布公告', notice.status === 201, `HTTP ${notice.status}`);

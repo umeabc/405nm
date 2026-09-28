@@ -2,7 +2,7 @@ import { EditOutlined } from '@ant-design/icons';
 import { App as AntApp, Button, Input, Modal, Select, Space, Tooltip, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, projectApi, workflowApi, type CreditSummary, type ProjectMemberRow } from '../api/client';
-import { comiku } from '../theme';
+import { palette } from '../theme';
 
 /**
  * 署名栏。
@@ -150,7 +150,7 @@ export function CreditsBar({ fileId, canEdit, projectId, compact = true }: Credi
           value={names.join('、')}
           readOnly
         />
-        <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 8, color: comiku.inkSoft }}>
+        <Typography.Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 8, color: palette.inkSoft }}>
           提示：自动署名记的是「按下完成的人」。如果有人代按，在这里改成实际出力的人。
         </Typography.Text>
       </Modal>

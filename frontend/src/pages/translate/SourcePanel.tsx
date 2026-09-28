@@ -1,9 +1,10 @@
 import { DeleteOutlined, EnvironmentOutlined } from '@ant-design/icons';
 import { Button, Empty, Input, Popconfirm, Space, Tag, Tooltip, Typography } from 'antd';
 import { useEffect, useRef } from 'react';
-import { checkText } from '@405nm/shared';
+import { checkText, type PositionType } from '@405nm/shared';
 import type { SourceWithTranslations } from '../../api/client';
-import { comiku } from '../../theme';
+import { palette } from '../../theme';
+import { MARKER_FILL, MARKER_TEXT } from './Canvas';
 
 /**
  * 右侧标号列表与译文输入。
@@ -26,9 +27,14 @@ export type SourcePanelProps = {
   /** 原文可否编辑 */
   canEditSource: boolean;
   onSourceTextChange: (sourceId: string, value: string) => void;
+  /** 改框内 / 框外。画布上用左右键决定，这里给一个不用记键位的入口。 */
+  onPositionTypeChange: (sourceId: string, positionType: PositionType) => void;
   mode: 'translate' | 'proofread';
   canDelete: boolean;
 };
+
+/** 框内 / 框外的中文名。画布图例与这里必须用同一套说法。 */
+export const POSITION_LABEL: Record<PositionType, string> = { in: '框内', out: '框外' };
 
 export function SourcePanel({
   sources,
@@ -39,6 +45,7 @@ export function SourcePanel({
   onDelete,
   canEditSource,
   onSourceTextChange,
+  onPositionTypeChange,
   mode,
   canDelete,
 }: SourcePanelProps) {
@@ -58,7 +65,7 @@ export function SourcePanel({
         style={{ marginTop: 40 }}
         description={
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            这张图还没有标号。选「框」或「点」工具，在图上拖出文本框。
+            这张图还没有标号。左键点画面 = 框内，右键点 = 框外。
           </Typography.Text>
         }
       />
@@ -85,9 +92,40 @@ export function SourcePanel({
           >
             <div className="nm-source-head">
               <Space size={6}>
-                <Tag color={selected ? comiku.primary : undefined} style={{ marginInlineEnd: 0, fontSize: 11 }}>
+                <Tag color={selected ? palette.primary : undefined} style={{ marginInlineEnd: 0, fontSize: 11 }}>
                   {index + 1}
                 </Tag>
+                {/* 点一下就能换框内/框外。画布上是左右键，但那个键位不写在脸上 ——
+                    这里给一个不用记的入口，也让「当前是框内还是框外」始终可见。 */}
+                <Tooltip
+                  title={
+                    canEditSource
+                      ? `当前是${POSITION_LABEL[source.positionType]}，点击切换`
+                      : `当前是${POSITION_LABEL[source.positionType]}`
+                  }
+                >
+                  <Tag
+                    style={{
+                      marginInlineEnd: 0,
+                      fontSize: 11,
+                      cursor: canEditSource ? 'pointer' : 'default',
+                      color: MARKER_TEXT[source.positionType],
+                      // 与画布上的标记同色：列表里一眼就能和画面上的点对上。
+                      background: MARKER_FILL[source.positionType],
+                      borderColor: 'transparent',
+                    }}
+                    onClick={
+                      canEditSource
+                        ? (event) => {
+                            event.stopPropagation();
+                            onPositionTypeChange(source.id, source.positionType === 'in' ? 'out' : 'in');
+                          }
+                        : undefined
+                    }
+                  >
+                    {POSITION_LABEL[source.positionType]}
+                  </Tag>
+                </Tooltip>
                 <StatusTag status={status} />
                 {source.translations.length > 1 ? (
                   <Tooltip title={`这个标号有 ${source.translations.length} 份候选译文`}>
@@ -189,8 +227,8 @@ function statusOf(source: SourceWithTranslations, mode: 'translate' | 'proofread
 function StatusTag({ status }: { status: Status }) {
   const map: Record<Status, { text: string; color?: string }> = {
     empty: { text: '未翻译' },
-    translated: { text: '已翻译', color: comiku.success },
-    proofread: { text: '已校对', color: comiku.primary },
+    translated: { text: '已翻译', color: palette.success },
+    proofread: { text: '已校对', color: palette.primary },
     stale: { text: '未校对' },
   };
   const meta = map[status];

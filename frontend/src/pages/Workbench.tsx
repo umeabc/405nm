@@ -27,11 +27,11 @@ import {
   type TeamSummary,
 } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
-import { PageHeader } from '../components/AppShell';
+import { ContentTitle } from '../components/AppShell';
 import { ProjectCard } from '../components/ProjectCard';
 import { ProjectFormModal } from '../components/ProjectFormModal';
 import { STAGE_TABS } from '../components/StageChips';
-import { comiku } from '../theme';
+import { palette } from '../theme';
 import { timeAgo } from '../utils/time';
 
 /** 按时间问候 —— 设计稿里就是「早上好，小凛」，这里保持一致。 */
@@ -108,7 +108,7 @@ export default function WorkbenchPage() {
 
   return (
     <>
-      <PageHeader
+      <ContentTitle
         title={`${greetingOf(new Date())}，${user?.displayName ?? ''}`}
         description="故事的下一页，从这里开始。"
         extra={
@@ -212,7 +212,7 @@ export default function WorkbenchPage() {
                   >
                     <Space style={{ width: '100%', justifyContent: 'space-between' }}>
                       <Space size={8}>
-                        <TeamOutlined style={{ color: comiku.primary }} />
+                        <TeamOutlined style={{ color: palette.primary }} />
                         <Space direction="vertical" size={0}>
                           <Typography.Text>{team.name}</Typography.Text>
                           <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -221,10 +221,10 @@ export default function WorkbenchPage() {
                         </Space>
                       </Space>
                       <Space size={4}>
-                        <Tag color={comiku.primary} style={{ marginInlineEnd: 0 }}>
+                        <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
                           {team.myRole.name}
                         </Tag>
-                        <RightOutlined style={{ fontSize: 10, color: comiku.inkSoft }} />
+                        <RightOutlined style={{ fontSize: 10, color: palette.inkSoft }} />
                       </Space>
                     </Space>
                   </List.Item>

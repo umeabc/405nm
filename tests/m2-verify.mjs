@@ -10,13 +10,14 @@
  *     -e M2_ADMIN_PASSWORD=... backend node /repo/tests/m2-verify.mjs
  *
  * ⚠️ 挂载点是 /repo/tests 而不是 /tests：这样 Node 的模块解析能从 /repo/node_modules
- * 找到依赖。挂到 /tests 的话，`import zlib` 之外的任何第三方模块都会解析失败。
+ * 找到依赖，相对导入的 `./lib/png.mjs` 也才落在正确的位置。挂到 /tests 的话，
+ * 任何第三方模块都会解析失败。
  *
  * 与 m1-verify.mjs 同一套骨架：自带数据、断言带中文说明、失败以非零码退出。
  * 所有数据都带 run id 后缀，脚本可以反复跑而不互相干扰。
  */
 
-import zlib from 'node:zlib';
+import { makePng } from './lib/png.mjs';
 
 const BASE = (process.argv[2] ?? 'http://backend:3000/api').replace(/\/$/, '');
 
@@ -85,67 +86,6 @@ class Client {
   del = (p) => this.request('DELETE', p);
 }
 
-/* ── 造一张真 PNG ────────────────────────────────────────────
-   不能拿假字节糊弄：后端要用 sharp 解码出宽高、生成缩略图。
-   这里手写一个最小 PNG 编码器（IHDR + IDAT + IEND），
-   好处是零依赖 —— 脚本在容器里、在开发机上都能直接跑。 */
-
-const CRC_TABLE = (() => {
-  const table = new Int32Array(256);
-  for (let n = 0; n < 256; n += 1) {
-    let c = n;
-    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c;
-  }
-  return table;
-})();
-
-function crc32(buf) {
-  let c = 0xffffffff;
-  for (const byte of buf) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
-
-function pngChunk(type, data) {
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length, 0);
-  const typeBuf = Buffer.from(type, 'ascii');
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
-  return Buffer.concat([length, typeBuf, data, crc]);
-}
-
-/** 生成一张纯色 PNG。尺寸可控，便于断言 width/height 与缩略图缩放。 */
-function makePng(width, height, [r, g, b] = [240, 131, 106]) {
-  const raw = Buffer.alloc((width * 3 + 1) * height);
-  let offset = 0;
-  for (let y = 0; y < height; y += 1) {
-    raw[offset] = 0; // filter: none
-    offset += 1;
-    for (let x = 0; x < width; x += 1) {
-      raw[offset] = r;
-      raw[offset + 1] = g;
-      raw[offset + 2] = b;
-      offset += 3;
-    }
-  }
-
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 2; // color type: truecolor
-  ihdr[10] = 0;
-  ihdr[11] = 0;
-  ihdr[12] = 0;
-
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    pngChunk('IHDR', ihdr),
-    pngChunk('IDAT', zlib.deflateSync(raw)),
-    pngChunk('IEND', Buffer.alloc(0)),
-  ]);
-}
 
 /** 用 multipart 上传一张图。不手写 Content-Type —— 让 fetch 自己带 boundary。 */
 async function uploadImage(client, projectId, filename, buffer = makePng(60, 80)) {

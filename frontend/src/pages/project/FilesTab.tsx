@@ -30,7 +30,7 @@ import { ApiError, fileApi, translateApi, type ProjectFileRow } from '../../api/
 import { FileMoveModal } from '../../components/FileMoveModal';
 import { UploadModal } from '../../components/UploadModal';
 import { useClientConfig } from '../../hooks/useClientConfig';
-import { comiku } from '../../theme';
+import { palette } from '../../theme';
 import { formatBytes } from '../../utils/time';
 import type { ProjectTabProps } from './index';
 
@@ -300,7 +300,7 @@ export function FilesTab({
                   >
                     <div className="nm-file-thumb">
                       {deleted ? (
-                        <Space direction="vertical" size={4} style={{ color: comiku.inkSoft }}>
+                        <Space direction="vertical" size={4} style={{ color: palette.inkSoft }}>
                           <InboxOutlined style={{ fontSize: 20 }} />
                           <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                             已删除

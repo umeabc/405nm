@@ -1,30 +1,28 @@
+import { randomUUID } from 'node:crypto';
 import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { hashPassword } from '../../auth/password.js';
 import { destroyAllSessionsForUser } from '../../auth/session.js';
 import { db } from '../../db/client.js';
-import { noticeReads, notices, sessions, siteSettings, teamMembers, users } from '../../db/schema.js';
+import { noticeReads, notices, sessions, teamMembers, users } from '../../db/schema.js';
+import {
+  ALL_SETTING_KEYS,
+  MASCOT_SETTING_KEY,
+  SITE_SETTING_KEYS,
+  readBranding,
+  readSetting,
+  readSettings,
+  writeSettings,
+} from '../../domain/site-settings.js';
 import { env } from '../../env.js';
 import { badRequest, conflict, forbidden, notFound } from '../../lib/errors.js';
+import { probeImage } from '../../lib/image.js';
 import { logOp } from '../../lib/oplog.js';
 import { consumeRateLimit } from '../../lib/rate-limit.js';
 import { validateDisplayName, validatePassword, validateUsername } from '../../lib/validate.js';
+import { newSiteBrandKey, safeImageExt, storage } from '../../storage/index.js';
 import { clientIp, requireAuth, requireSiteAdmin } from '../guards.js';
-
-/**
- * 站点设置的键白名单。
- *
- * 与图译空间的一处**刻意分歧**：它的 `PUT /api/settings` 只要登录就能改全站配置
- * （那是扁平权限模型下的取舍）。405nm 是真实分权的系统，站点设置仅站点管理员可写。
- */
-const SITE_SETTING_KEYS = [
-  'site.name',
-  'site.slogan',
-  'site.englishName',
-  'site.description',
-  'site.footer',
-] as const;
 
 const publicUserColumns = {
   id: users.id,
@@ -356,11 +354,12 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/admin/settings', async (request) => {
     await requireSiteAdmin(request);
-    const rows = await db.select().from(siteSettings);
-    const map: Record<string, unknown> = {};
-    for (const key of SITE_SETTING_KEYS) map[key] = null;
-    for (const row of rows) map[row.key] = row.value;
-    return { settings: map, allowedKeys: SITE_SETTING_KEYS };
+    return {
+      // 读全部键（含立绘的存储键，后台需要知道「有没有配过立绘」），
+      // 但 allowedKeys 只列可写的那些 —— 立绘只能经下面那个专用接口改。
+      settings: await readSettings(ALL_SETTING_KEYS),
+      allowedKeys: SITE_SETTING_KEYS,
+    };
   });
 
   app.put('/admin/settings', async (request) => {
@@ -373,15 +372,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     const entries = Object.entries(parsed.data).filter(([key]) => allowed.has(key));
     if (entries.length === 0) throw badRequest('没有可保存的设置项', 'NO_SETTING_TO_SAVE');
 
-    for (const [key, value] of entries) {
-      await db
-        .insert(siteSettings)
-        .values({ key, value: value as never, updatedBy: admin.id })
-        .onConflictDoUpdate({
-          target: siteSettings.key,
-          set: { value: value as never, updatedBy: admin.id, updatedAt: new Date() },
-        });
-    }
+    await writeSettings(entries, admin.id);
 
     await logOp({
       actorId: admin.id,
@@ -391,18 +382,98 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       ip: clientIp(request),
     });
 
-    return { ok: true };
+    return { ok: true, branding: await readBranding() };
   });
 
-  /** 站点设置的公开读取：登录页也要显示站点名。 */
-  app.get('/site/settings', async () => {
-    const rows = await db
-      .select()
-      .from(siteSettings)
-      .where(inArray(siteSettings.key, [...SITE_SETTING_KEYS]));
-    const map: Record<string, unknown> = {};
-    for (const row of rows) map[row.key] = row.value;
-    return { settings: map };
+  // ── 站点立绘 ──────────────────────────────────────────────
+  //
+  // 立绘与作品图片走**同一套存储前缀体系**（`site-brand/`），但**不进 `files` 表**：
+  // 全站只有这一张，没有列表、改名、软删除、团队去重这些需求，
+  // 塞进 files 只会给「团队级 MD5 去重」和「作品权限」添一堆特例。
+  //
+  // 两条写路由的**共同顺序：先改指针（设置项），再清理字节**。
+  // 反过来一旦中间失败，就留下「设置指向一个已被删掉的对象」——
+  // 表现是立绘位置长期 404。按这个顺序，最坏结果只是磁盘上多一个没人引用的孤儿对象。
+
+  app.post(
+    '/admin/settings/mascot',
+    { bodyLimit: env.MAX_IMAGE_MB * 1024 * 1024 + 1024 * 1024 },
+    async (request) => {
+      const admin = await requireSiteAdmin(request);
+      if (!request.isMultipart()) {
+        throw badRequest('请使用 multipart/form-data 上传图片', 'NOT_MULTIPART');
+      }
+
+      let filename = '';
+      let buffer: Buffer | null = null;
+      for await (const part of request.parts()) {
+        if (part.type !== 'file') continue;
+        filename = part.filename ?? '';
+        try {
+          buffer = await part.toBuffer();
+        } catch (err) {
+          if ((err as { code?: string }).code === 'FST_REQ_FILE_TOO_LARGE') {
+            throw badRequest(`图片超过 ${env.MAX_IMAGE_MB}MB 上限`, 'FILE_TOO_LARGE');
+          }
+          throw badRequest('读取上传内容失败', 'READ_FAILED');
+        }
+        // 单文件控件，只认第一张；后面的部分不报错也不处理。
+        break;
+      }
+      if (!buffer) throw badRequest('没有收到图片文件', 'NO_FILE');
+
+      let ext: string;
+      try {
+        ext = safeImageExt(filename);
+      } catch (err) {
+        throw badRequest(err instanceof Error ? err.message : '不支持的图片格式', 'UNSUPPORTED_IMAGE');
+      }
+
+      // 扩展名是客户端说了算的，**必须**再让 libvips 真的解一次。
+      // 这条路由吐出的字节是**公开可读**的，一个改名成 .png 的可执行文件
+      // 会被原样存下并对外提供 —— 这一步比在作品上传里更不能省。
+      await probeImage(buffer);
+
+      const key = newSiteBrandKey('mascot', randomUUID(), ext);
+      await storage.put(key, buffer);
+
+      const previous = await readSetting(MASCOT_SETTING_KEY);
+      await writeSettings([[MASCOT_SETTING_KEY, key]], admin.id);
+      if (typeof previous === 'string' && previous !== '' && previous !== key) {
+        await storage.remove(previous);
+      }
+
+      await logOp({
+        actorId: admin.id,
+        action: 'admin.branding.mascot',
+        targetType: 'site_setting',
+        detail: { size: buffer.byteLength, ext },
+        ip: clientIp(request),
+      });
+
+      return { ok: true, branding: await readBranding() };
+    },
+  );
+
+  app.delete('/admin/settings/mascot', async (request) => {
+    const admin = await requireSiteAdmin(request);
+
+    const previous = await readSetting(MASCOT_SETTING_KEY);
+    // 置空而不是删行：`readSettings` 的语义是「缺失的键补 null」，
+    // 两种「没有」在读取侧长得一样，但置空少一次数据库往返之外还能保留 updatedAt 供审计。
+    await writeSettings([[MASCOT_SETTING_KEY, '']], admin.id);
+    if (typeof previous === 'string' && previous !== '') {
+      await storage.remove(previous);
+    }
+
+    await logOp({
+      actorId: admin.id,
+      action: 'admin.branding.mascot.clear',
+      targetType: 'site_setting',
+      ip: clientIp(request),
+    });
+
+    return { ok: true, branding: await readBranding() };
   });
 
   // ── 公告通知 ──────────────────────────────────────────────

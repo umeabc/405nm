@@ -2,7 +2,7 @@ import { PictureOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
 import { Avatar, Button, Card, Progress, Space, Tag, Tooltip, Typography } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { fileApi, type ProjectCard as ProjectCardData } from '../api/client';
-import { comiku, stageColors } from '../theme';
+import { palette, stageColors } from '../theme';
 
 /**
  * 作品卡 —— 工作台的主视觉单元。
@@ -58,7 +58,7 @@ function ProgressLine({ label, done, total }: { label: string; done: number; tot
         percent={percent}
         showInfo={false}
         size="small"
-        strokeColor={percent >= 100 ? comiku.success : comiku.primary}
+        strokeColor={percent >= 100 ? palette.success : palette.primary}
         style={{ flex: 1, margin: 0 }}
       />
       <Typography.Text type="secondary" style={{ fontSize: 11, width: 44, textAlign: 'right', flex: 'none' }}>
@@ -76,6 +76,7 @@ export function ProjectCard({ card, todoCount = 0 }: { card: ProjectCardData; to
   return (
     <Card
       hoverable
+      className="nm-project-card"
       onClick={() => navigate(`/projects/${card.id}`)}
       styles={{ body: { padding: 16 } }}
       style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
@@ -87,9 +88,9 @@ export function ProjectCard({ card, todoCount = 0 }: { card: ProjectCardData; to
             width: 76,
             height: 100,
             flex: 'none',
-            borderRadius: 10,
+            borderRadius: 6,
             overflow: 'hidden',
-            background: 'var(--comiku-border)',
+            background: 'var(--nm-border)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -103,7 +104,7 @@ export function ProjectCard({ card, todoCount = 0 }: { card: ProjectCardData; to
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
           ) : (
-            <PictureOutlined style={{ fontSize: 22, color: comiku.inkSoft }} />
+            <PictureOutlined style={{ fontSize: 22, color: palette.inkSoft }} />
           )}
         </div>
 
@@ -114,7 +115,7 @@ export function ProjectCard({ card, todoCount = 0 }: { card: ProjectCardData; to
                 有它才能一眼看出「今天该动哪部作品」。 */}
             {todoCount > 0 ? (
               <Tooltip title={`有 ${todoCount} 张图正等着你处理`}>
-                <Tag color={comiku.warning} style={{ marginInlineEnd: 0, fontSize: 11 }}>
+                <Tag color={palette.warning} style={{ marginInlineEnd: 0, fontSize: 11 }}>
                   待办 {todoCount}
                 </Tag>
               </Tooltip>
@@ -125,7 +126,7 @@ export function ProjectCard({ card, todoCount = 0 }: { card: ProjectCardData; to
             {card.status === 'archived' ? <Tag style={{ marginInlineEnd: 0, fontSize: 11 }}>已归档</Tag> : null}
           </Space>
 
-          <Typography.Text strong ellipsis style={{ display: 'block', fontSize: 15 }}>
+          <Typography.Text strong ellipsis style={{ display: 'block', fontSize: 14 }}>
             {card.name}
           </Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis>
@@ -144,7 +145,7 @@ export function ProjectCard({ card, todoCount = 0 }: { card: ProjectCardData; to
         style={{
           marginTop: 14,
           paddingTop: 12,
-          borderTop: `1px solid var(--comiku-border)`,
+          borderTop: `1px solid var(--nm-border)`,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -163,7 +164,7 @@ export function ProjectCard({ card, todoCount = 0 }: { card: ProjectCardData; to
                 <Tooltip key={m.userId} title={`${m.displayName} · ${m.roleName}`}>
                   <Avatar
                     size={24}
-                    style={{ background: comiku.primary, fontSize: 11 }}
+                    style={{ background: palette.primary, fontSize: 11 }}
                     src={m.avatarKey ?? undefined}
                   >
                     {m.displayName.slice(0, 1)}
@@ -173,7 +174,7 @@ export function ProjectCard({ card, todoCount = 0 }: { card: ProjectCardData; to
             </Avatar.Group>
           ) : (
             <Space size={4}>
-              <UserOutlined style={{ fontSize: 11, color: comiku.inkSoft }} />
+              <UserOutlined style={{ fontSize: 11, color: palette.inkSoft }} />
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                 {total > 0 ? `${total} 页` : '还没有图片'}
               </Typography.Text>

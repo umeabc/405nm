@@ -484,12 +484,24 @@ export const sources = pgTable(
     fileId: uuid('file_id')
       .notNull()
       .references(() => files.id, { onDelete: 'cascade' }),
-    /** box | pin */
-    kind: text('kind').notNull().default('box'),
+    /**
+     * 框内 | 框外。
+     *
+     * 注意它**不是几何判定**，而是创建时由鼠标键位决定的分类：
+     * 左键点画面 = 框内、右键点 = 框外。分类的用途在嵌字环节
+     * （框内的字压在画面上、框外的字贴在画面外），而嵌字是离线在 PS 里做的，
+     * 那边只能读到这份数据，所以必须落库、不能渲染时再猜。
+     */
+    positionType: text('position_type').notNull().default('in'),
     // 用 doublePrecision 而不是 real：归一化坐标在 float4 上往返一次会掉精度，
     // 表现为「标号存了又读之后位置微微变了」，在反复微调的场景里很烦人。
+    /** 归一化 x。标号坐标 = 箭尖指向的那一点 */
     x: doublePrecision('x').notNull().default(0),
     y: doublePrecision('y').notNull().default(0),
+    /**
+     * 归一化宽高。**当前一律为 0** —— 标号是点，画面上不再有矩形。
+     * 留着只为迁移期如实存下旧站的矩形/多边形标注，以及 M5 导出按框排版。
+     */
     w: doublePrecision('w').notNull().default(0),
     h: doublePrecision('h').notNull().default(0),
     /** 多边形顶点 `[[x,y],…]`（归一化）；null 表示用上面的矩形 */

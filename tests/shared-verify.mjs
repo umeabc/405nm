@@ -13,9 +13,13 @@
  */
 
 import {
+  MARKER_ARROW_HEIGHT,
+  MARKER_CENTER_DY,
+  MARKER_RADIUS,
+  annotationRect,
   checkText,
   groupVerticalRuns,
-  hitTest,
+  hitTestMarker,
   layoutText,
   normalizeTextLayers,
   wrapText,
@@ -227,16 +231,75 @@ console.log('\n四、样式规范化');
 console.log('\n五、命中判定');
 
 {
-  const big = { id: 'big', kind: 'box', x: 0.1, y: 0.1, w: 0.8, h: 0.8, vertices: null, groupId: null, orderIndex: 0, content: '', note: '', style: {} };
-  const small = { id: 'small', kind: 'box', x: 0.4, y: 0.4, w: 0.1, h: 0.1, vertices: null, groupId: null, orderIndex: 1, content: '', note: '', style: {} };
-  const hit = hitTest([big, small], 0.45, 0.45);
-  record('大框套小框时命中小框（用户想选的是小的那个）', hit?.id === 'small', String(hit?.id));
-  record('点在只有大框的地方命中外层框', hitTest([big, small], 0.15, 0.15)?.id === 'big');
-  record('点在空白处返回 null', hitTest([big, small], 0.95, 0.95) === null);
+  // 标记是**固定屏幕尺寸**的，所以判定发生在屏幕坐标里。
+  // 这一组断言的真正价值在于：它把「画出来的形状」与「判定的形状」
+  // 钉在同一份常量上 —— 两边不一致时，症状是「看着点在圆点上却没选中」，
+  // 在界面上只会被当成手感差，很难定位到是几像素的事。
+  const marker = { id: 'a', screenX: 300, screenY: 500 };
+  const other = { id: 'b', screenX: 500, screenY: 500 };
+  const markers = [marker, other];
 
-  const pin = { id: 'pin', kind: 'pin', x: 0.5, y: 0.5, w: 0, h: 0, vertices: null, groupId: null, orderIndex: 2, content: '', note: '', style: { fontSizeRatio: 0.05 } };
-  record('打点标记在中心附近可命中', hitTest([pin], 0.5, 0.5)?.id === 'pin');
-  record('打点标记在远处不命中', hitTest([pin], 0.6, 0.6) === null);
+  record('点在圆点中心命中', hitTestMarker(markers, 300, 500 + MARKER_CENTER_DY)?.id === 'a');
+  record(
+    '点在圆点边缘仍命中',
+    hitTestMarker(markers, 300 + MARKER_RADIUS - 1, 500 + MARKER_CENTER_DY)?.id === 'a',
+  );
+  record(
+    '圆点再往外一点就不命中',
+    hitTestMarker([marker], 300 + MARKER_RADIUS + 1, 500 + MARKER_CENTER_DY) === null,
+  );
+
+  // 箭尖正落在标号坐标上，且只覆盖那一段三角形
+  record('箭尖所在处（标号坐标）命中', hitTestMarker([marker], 300, 500)?.id === 'a');
+  record('箭头底边处宽度最大', hitTestMarker([marker], 300 + 4, 500 - MARKER_ARROW_HEIGHT + 1)?.id === 'a');
+  record(
+    '箭头之外（坐标下方）不命中 —— 否则点画面下方会误选到上方的标号',
+    hitTestMarker([marker], 300, 501) === null,
+  );
+
+  // 重叠时选数组中靠后的那个：它画在上面，用户点的是看得见的那一个
+  const overlap = [
+    { id: 'under', screenX: 300, screenY: 500 },
+    { id: 'over', screenX: 300, screenY: 500 },
+  ];
+  record('重叠时选中画在上层的标记', hitTestMarker(overlap, 300, 500)?.id === 'over');
+
+  record('点在空白处返回 null', hitTestMarker(markers, 120, 120) === null);
+}
+
+// ── 五之二、标号的默认框 ────────────────────────────────────
+{
+  // 标号是点，w/h 一律为 0；`annotationRect` 在这个前提下要给一个
+  // 「以点为中心、边长等于一个字号」的正方形，供 M5 导出按框排版。
+  const point = {
+    id: 'p',
+    positionType: 'in',
+    x: 0.5,
+    y: 0.5,
+    w: 0,
+    h: 0,
+    vertices: null,
+    groupId: null,
+    orderIndex: 0,
+    content: '',
+    note: '',
+    style: { fontSizeRatio: 0.04 },
+  };
+
+  const rect = annotationRect(point);
+  record(
+    '打点的默认框以点为中心、边长等于一个字号',
+    Math.abs(rect.x + rect.w / 2 - 0.5) < 1e-9 && Math.abs(rect.w - 0.04) < 1e-9 && rect.w === rect.h,
+    JSON.stringify(rect),
+  );
+
+  const legacy = { ...point, x: 0.4, y: 0.3, w: -0.2, h: 0.1 };
+  const legacyRect = annotationRect(legacy);
+  record(
+    '负宽高的旧数据被统一成正的矩形',
+    Math.abs(legacyRect.x - 0.2) < 1e-9 && Math.abs(legacyRect.w - 0.2) < 1e-9 && legacyRect.h > 0,
+    JSON.stringify(legacyRect),
+  );
 }
 
 // ── 六、标点检查 ────────────────────────────────────────────

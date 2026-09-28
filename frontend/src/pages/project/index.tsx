@@ -5,7 +5,7 @@ import { Link, useParams } from 'react-router-dom';
 import { ApiError, projectApi, type ProjectDetail } from '../../api/client';
 import { useAuth } from '../../auth/AuthContext';
 import { ProjectFormModal } from '../../components/ProjectFormModal';
-import { comiku, stageColors } from '../../theme';
+import { palette, stageColors } from '../../theme';
 import { FilesTab } from './FilesTab';
 import { MembersTab } from './MembersTab';
 import { RolesTab } from './RolesTab';
@@ -102,11 +102,11 @@ export default function ProjectDetailPage() {
               </Tag>
               {project.status === 'archived' ? <Tag style={{ marginInlineEnd: 0 }}>已归档</Tag> : null}
               {my.role ? (
-                <Tag color={comiku.primary} style={{ marginInlineEnd: 0 }}>
+                <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
                   我是{my.role.name}
                 </Tag>
               ) : my.viaTeamRole ? (
-                <Tag color={comiku.primary} style={{ marginInlineEnd: 0 }}>
+                <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
                   团队角色授权
                 </Tag>
               ) : null}

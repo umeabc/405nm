@@ -11,8 +11,9 @@ import { normalizeTextLayers, wrapText, wrapVertical, type Measure, type Vertica
  *    换分辨率、换屏幕、换导出尺寸都不会错位。
  * 2. **宽度高度从框算，不从文字算**。文字排版是「往框里塞」，
  *    塞不下就缩字号、再塞不下就溢出（并如实标记 overflow）。
- * 3. `pin`（打点）与 `box`（拖框）用同一套字段表示：pin 的 w/h 为 0，
- *    坐标就是中心点。分成两种结构会让后面的每一段代码都写两遍分支。
+ * 3. **标号是点，不是框**。对齐彩翻的工作台形态：画面上只有「数字圆点 + 箭头」，
+ *    没有矩形。坐标就是箭尖所指的那一点。`w/h` 仍然保留，但当前一律为 0 ——
+ *    留着是为了迁移期能如实存下旧站的矩形/多边形标注，以及 M5 导出要按框排版。
  */
 
 export function clamp01(value: number): number {
@@ -25,7 +26,18 @@ export function clamp01(value: number): number {
 /** 文字排版的基础字号约定：字号按相对图片高度的比例存储，而非绝对像素。 */
 export const DEFAULT_FONT_SIZE_RATIO = 0.035;
 
-export type AnnotationKind = 'box' | 'pin';
+/**
+ * 框内 / 框外。
+ *
+ * 取自彩翻，但要注意它**不是几何判定** —— 不是「文字落在画面内还是画面外」，
+ * 而是一个由**创建方式**决定的分类：左键点 = 框内、右键点 = 框外。
+ *
+ * 之所以要落成数据而不是渲染时再算：嵌字时这两类的处理方式不同，
+ * 而且嵌字是离线在 PS 里做的，那边只能看到这份数据。
+ */
+export type PositionType = 'in' | 'out';
+
+export const POSITION_TYPES: readonly PositionType[] = ['in', 'out'];
 
 /** 文字对齐。竖排下 `left/right` 的含义是「靠列的上端/下端」。 */
 export type TextAlign = 'left' | 'center' | 'right';
@@ -65,17 +77,20 @@ export const DEFAULT_TEXT_STYLE: TextStyle = {
   background: '',
 };
 
-/** 几何：`box` 用左上角 + 宽高，`pin` 用中心点（w/h 为 0）。 */
 export type Annotation = {
   id: string;
-  kind: AnnotationKind;
-  /** 归一化左上角 x（pin 时为中心 x） */
+  /** 框内还是框外。决定标记的颜色，也是嵌字时的分类依据。 */
+  positionType: PositionType;
+  /** 归一化 x（标号坐标 = 箭尖所指的那一点） */
   x: number;
-  /** 归一化左上角 y（pin 时为中心 y） */
+  /** 归一化 y */
   y: number;
-  /** 归一化宽度；pin 为 0 */
+  /**
+   * 归一化宽高。**当前一律为 0** —— 标号是点。
+   * 保留这两列只为两件事：迁移期如实存下旧站的矩形/多边形标注，
+   * 以及 M5 导出时按框排版（见下面的 `annotationRect`）。
+   */
   w: number;
-  /** 归一化高度；pin 为 0 */
   h: number;
   /** 多边形顶点（[[x,y],…]，归一化）。为 null 时用矩形。 */
   vertices: Array<[number, number]> | null;
@@ -93,45 +108,27 @@ export type Annotation = {
 export type Rect = { x: number; y: number; w: number; h: number };
 
 /**
- * 取「有效矩形」。pin 没有面积，视作以点为中心、边长等于一个字号的正方形 ——
- * 否则点击命中判定会退化成一个点，几乎点不中。
+ * 取「有效矩形」。
+ *
+ * 标号是点、没有面积，但 M5 导出要按框排版，所以 w/h 为 0 时退化成
+ * 「以点为中心、边长等于一个字号」的正方形 —— 一个既不至于空、也不会
+ * 离谱地吞掉半页画面的默认框。
+ *
+ * ⚠️ **画布不再用这个函数做命中判定** —— 标记是固定屏幕尺寸的，
+ * 判定必须在屏幕空间做，见 `marker.ts` 的 `hitTestMarker`。
  */
 export function annotationRect(annotation: Annotation): Rect {
-  if (annotation.kind === 'pin') {
-    const half = ((annotation.style?.fontSizeRatio ?? DEFAULT_FONT_SIZE_RATIO) * 0.5);
-    return {
-      x: annotation.x - half,
-      y: annotation.y - half,
-      w: half * 2,
-      h: half * 2,
-    };
+  if (annotation.w === 0 && annotation.h === 0) {
+    const half = (annotation.style?.fontSizeRatio ?? DEFAULT_FONT_SIZE_RATIO) / 2;
+    return { x: annotation.x - half, y: annotation.y - half, w: half * 2, h: half * 2 };
   }
-  // 允许负宽高（从右下往左上拖），这里统一成正的。
+  // 允许负宽高（旧数据里从右下往左上拖的框），这里统一成正的。
   return {
     x: annotation.w < 0 ? annotation.x + annotation.w : annotation.x,
     y: annotation.h < 0 ? annotation.y + annotation.h : annotation.y,
     w: Math.abs(annotation.w),
     h: Math.abs(annotation.h),
   };
-}
-
-/** 命中判定：点在哪个标号里。面积小的优先 —— 大框套小框时，用户想点的是小的那个。 */
-export function hitTest(annotations: readonly Annotation[], px: number, py: number): Annotation | null {
-  let best: Annotation | null = null;
-  let bestArea = Number.POSITIVE_INFINITY;
-
-  for (const annotation of annotations) {
-    const rect = annotationRect(annotation);
-    if (px < rect.x || px > rect.x + rect.w || py < rect.y || py > rect.y + rect.h) continue;
-
-    const area = Math.max(rect.w * rect.h, 1e-6);
-    if (area < bestArea) {
-      best = annotation;
-      bestArea = area;
-    }
-  }
-
-  return best;
 }
 
 // ── 排版 ────────────────────────────────────────────────────

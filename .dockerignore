@@ -1,0 +1,24 @@
+# 构建上下文是仓库根目录（workspaces 需要根 package.json 与 lockfile）。
+#
+# 没有这个文件时，本地 node_modules、.git、上一轮的构建产物会被**整包送给
+# docker daemon** —— 它们一个都不进镜像（两个 Dockerfile 都是逐条 COPY 的），
+# 只是白白拖慢每一次构建。测试机内存紧张，这个浪费尤其不值得。
+#
+# ⚠️ 注意**不要**排除 frontend/build：前端镜像是直接 COPY 它的
+#    （本地构建、远程只跑镜像，见 frontend/Dockerfile 的说明）。
+
+node_modules
+**/node_modules
+
+.git
+.gitignore
+
+# 后端产物在镜像里由 `npm run build` 现生成，包里的 dist 反而可能过期。
+backend/dist
+packages/*/dist
+frontend/tsconfig.tsbuildinfo
+
+# 环境文件与日志。deploy/.env 含密钥，绝不能进构建上下文。
+.env
+**/.env
+*.log

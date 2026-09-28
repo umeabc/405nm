@@ -13,7 +13,7 @@
  * 不走注册（注册有单 IP 每小时 3 次的限流，会让脚本没法反复跑）。
  */
 
-import zlib from 'node:zlib';
+import { makePng } from './lib/png.mjs';
 
 const BASE = (process.argv[2] ?? 'http://backend:3000/api').replace(/\/$/, '');
 const ADMIN_USERNAME = process.env.M3_ADMIN_USERNAME ?? 'admin';
@@ -77,55 +77,6 @@ class Client {
   del = (p) => this.request('DELETE', p);
 }
 
-/* ── 最小 PNG 编码器（与 m2 同一份，零依赖）── */
-const CRC_TABLE = (() => {
-  const t = new Int32Array(256);
-  for (let n = 0; n < 256; n += 1) {
-    let c = n;
-    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    t[n] = c;
-  }
-  return t;
-})();
-
-function crc32(buf) {
-  let c = 0xffffffff;
-  for (const byte of buf) c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-}
-
-function pngChunk(type, data) {
-  const len = Buffer.alloc(4);
-  len.writeUInt32BE(data.length, 0);
-  const typeBuf = Buffer.from(type, 'ascii');
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
-  return Buffer.concat([len, typeBuf, data, crc]);
-}
-
-function makePng(width, height, [r, g, b] = [240, 131, 106]) {
-  const raw = Buffer.alloc((width * 3 + 1) * height);
-  let o = 0;
-  for (let y = 0; y < height; y += 1) {
-    raw[o++] = 0;
-    for (let x = 0; x < width; x += 1) {
-      raw[o++] = r;
-      raw[o++] = g;
-      raw[o++] = b;
-    }
-  }
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8;
-  ihdr[9] = 2;
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    pngChunk('IHDR', ihdr),
-    pngChunk('IDAT', zlib.deflateSync(raw)),
-    pngChunk('IEND', Buffer.alloc(0)),
-  ]);
-}
 
 async function uploadImage(client, projectId, filename, buffer = makePng(800, 1200)) {
   const form = new FormData();
@@ -258,23 +209,64 @@ const fileA = upload.body?.uploaded?.[0]?.id;
 record('标号', '上传一张图', upload.status === 201 && Boolean(fileA), JSON.stringify(upload.body));
 
 {
+  // 标号是**点**，不是框：只传 x/y，没有 w/h。positionType 不传时默认「框内」。
   const created = await t.client.post(`/files/${fileA}/sources`, {
-    kind: 'box',
     x: 0.1,
     y: 0.2,
-    w: 0.3,
-    h: 0.1,
     content: 'こんにちは',
   });
   record('标号', '译者可以新增标号', created.status === 201, JSON.stringify(created.body));
+  record(
+    '标号',
+    '不传 positionType 时默认「框内」',
+    created.body?.source?.positionType === 'in',
+    JSON.stringify(created.body?.source?.positionType),
+  );
+  record(
+    '标号',
+    '新建的标号没有面积（w/h 为 0）—— 它是点不是框',
+    created.body?.source?.w === 0 && created.body?.source?.h === 0,
+    JSON.stringify({ w: created.body?.source?.w, h: created.body?.source?.h }),
+  );
+
+  const asOut = await t.client.post(`/files/${fileA}/sources`, {
+    positionType: 'out',
+    x: 0.5,
+    y: 0.5,
+    content: '框外的一句',
+  });
+  record(
+    '标号',
+    '可以建「框外」标号',
+    asOut.status === 201 && asOut.body?.source?.positionType === 'out',
+    JSON.stringify(asOut.body?.source?.positionType),
+  );
+
+  const bogus = await t.client.post(`/files/${fileA}/sources`, {
+    positionType: 'inside',
+    x: 0.5,
+    y: 0.5,
+  });
+  record('标号', '非法的 positionType 被拒（400）', bogus.status === 400, `HTTP ${bogus.status}`);
+
+  // 清理掉「框外」那个测试标号，后面的计数断言才成立。
+  // 顺带把权限分工也断言掉：译者有 label.add 但没有 label.delete，
+  // 所以清理必须由管理员来做。
+  const translatorDelete = await t.client.del(`/files/${fileA}/sources/${asOut.body.source.id}`);
+  record(
+    '权限',
+    '译者没有 label.delete，删不掉标号（403）',
+    translatorDelete.status === 403,
+    `HTTP ${translatorDelete.status}`,
+  );
+
+  const adminDelete = await admin.del(`/files/${fileA}/sources/${asOut.body.source.id}`);
+  record('标号', '有 label.delete 权限的人可以删掉标号', adminDelete.status === 200, `HTTP ${adminDelete.status}`);
 
   const clamped = await t.client.post(`/files/${fileA}/sources`, {
-    kind: 'box',
     // 故意越界：服务端应当夹紧而不是原样存下
     x: 1.7,
     y: -0.4,
-    w: 0.2,
-    h: 0.2,
     content: '越界测试',
   });
   record(
@@ -305,8 +297,8 @@ record('标号', '上传一张图', upload.status === 201 && Boolean(fileA), JSO
 
   const saved = await t.client.put(`/files/${fileA}/sources`, {
     sources: [
-      { id: first.id, kind: 'box', x: 0.15, y: 0.25, w: 0.3, h: 0.1, content: 'こんにちは！' },
-      { kind: 'pin', x: 0.6, y: 0.7, content: '新人' },
+      { id: first.id, positionType: 'in', x: 0.15, y: 0.25, content: 'こんにちは！' },
+      { positionType: 'out', x: 0.6, y: 0.7, content: '新人' },
     ],
   });
   record(
@@ -318,11 +310,16 @@ record('标号', '上传一张图', upload.status === 201 && Boolean(fileA), JSO
 
   const updated = saved.body.sources.find((s) => s.id === first.id);
   record('标号', '已有标号被更新（原文与坐标都变了）', updated?.content === 'こんにちは！' && updated?.x === 0.15, JSON.stringify(updated));
-  record('标号', '新标号被创建并获得服务端 id', saved.body.sources.some((s) => s.kind === 'pin' && s.id), '');
+  record(
+    '标号',
+    '新标号被创建、并获得服务端 id 与「框外」分类',
+    saved.body.sources.some((s) => s.positionType === 'out' && s.id),
+    '',
+  );
 
   // 全量替换：没出现的会被删掉
   const replaced = await t.client.put(`/files/${fileA}/sources`, {
-    sources: saved.body.sources.filter((s) => s.kind === 'box'),
+    sources: saved.body.sources.filter((s) => s.positionType === 'in'),
     replace: true,
   });
   record(
@@ -338,7 +335,7 @@ record('标号', '上传一张图', upload.status === 201 && Boolean(fileA), JSO
   record('权限', '团队成员（未进作品）可以读标号', canRead.status === 200, `HTTP ${canRead.status}`);
 
   const deniedWrite = await o.client.post(`/files/${fileA}/sources`, {
-    kind: 'box', x: 0.1, y: 0.1, content: 'x',
+    x: 0.1, y: 0.1, content: 'x',
   });
   record('权限', '团队成员（未进作品）写标号被拒（403）', deniedWrite.status === 403, `HTTP ${deniedWrite.status}`);
 

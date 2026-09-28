@@ -1,10 +1,24 @@
+/* 这里的变量值必须与 theme.ts 的 palette / paletteDark 保持一致。
+   运行时由 applyCssVariables() 覆写，下面的 :root 只是首屏渲染前的兜底 ——
+   否则 antd 挂载之前会闪一下无色页面。 */
 :root {
-  --comiku-bg: #fdf8f3;
-  --comiku-surface: #ffffff;
-  --comiku-border: #f0e4da;
-  --comiku-ink: #3a3230;
-  --comiku-ink-soft: #8a7c74;
-  --comiku-primary: #f0836a;
+  --nm-bg: #ffffff;
+  --nm-surface: #ffffff;
+  --nm-border: #eeeeee;
+  --nm-border-strong: #dbdbdb;
+  --nm-ink: rgb(0 0 0 / 85%);
+  --nm-ink-soft: rgb(0 0 0 / 45%);
+  --nm-primary: #ff657c;
+  --nm-primary-deep: #d94c66;
+  --nm-primary-soft: #ff8f9c;
+  --nm-gold: #f2b64b;
+  --nm-paper: #fdf4f6;
+  --nm-header-h: 56px;
+
+  /* 主色的 RGB 通道。半透明态（选中底、描边、阴影）一律写成
+     `rgb(var(--nm-primary-rgb) / 25%)` —— 换主色时只改上面那一行，
+     不会漏掉某个文件里写死的 rgb(240 131 106)。 */
+  --nm-primary-rgb: 255 101 124;
 }
 
 * {
@@ -19,8 +33,8 @@ body,
 }
 
 body {
-  background: var(--comiku-bg);
-  color: var(--comiku-ink);
+  background: var(--nm-bg);
+  color: var(--nm-ink);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -42,12 +56,272 @@ body {
   padding: 24px;
 }
 
+/* ── 登录页 ────────────────────────────────────────────────
+   整屏左右分栏：左边立绘与站名，右边认证卡片。窄屏（<900px）只留卡片。
+   版式取自彩翻的 Login.tsx；暗色下另行调色（彩翻那边登录页写死了浅色，
+   我们有自己的暗色开关，不能让这一页掉队）。 */
+
+.nm-login {
+  min-height: 100vh;
+  display: flex;
+  align-items: stretch;
+  background: linear-gradient(135deg, var(--nm-paper) 0%, var(--nm-bg) 55%, #fff7f0 100%);
+}
+
+[data-theme='dark'] .nm-login {
+  background: linear-gradient(135deg, #1a1416 0%, var(--nm-bg) 55%, #171310 100%);
+}
+
+.nm-login-brand {
+  flex: 1.1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 40px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* 立绘背后两圈光环，一粉一金，错开呼吸。 */
+.nm-login-halo {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: nm-breathe 4.5s ease-in-out infinite;
+}
+
+.nm-login-halo.is-pink {
+  width: min(58vh, 460px);
+  aspect-ratio: 1;
+  border: 1px solid rgb(255 101 124 / 35%);
+}
+
+.nm-login-halo.is-gold {
+  width: min(44vh, 350px);
+  aspect-ratio: 1;
+  border: 1px solid rgb(242 182 75 / 35%);
+  animation-delay: -2.2s;
+}
+
+@keyframes nm-breathe {
+  0%,
+  100% {
+    transform: scale(0.94);
+    opacity: 0.55;
+  }
+
+  50% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
+}
+
+.nm-login-mascot {
+  position: relative;
+  height: min(46vh, 380px);
+  max-width: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 18px 36px rgb(255 101 124 / 22%));
+  animation: nm-float 5.5s ease-in-out infinite;
+}
+
+@keyframes nm-float {
+  0%,
+  100% {
+    transform: translateY(-8px);
+  }
+
+  50% {
+    transform: translateY(8px);
+  }
+}
+
+/* 没配立绘时的兜底：一个同样占位的字标，别让左半屏空成一块。
+   它同时是光环的视觉锚点，所以尺寸与立绘对齐。 */
+.nm-login-wordmark {
+  position: relative;
+  height: min(46vh, 380px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(48px, 9vw, 132px);
+  font-weight: 800;
+  letter-spacing: 4px;
+  color: rgb(var(--nm-primary-rgb) / 18%);
+  user-select: none;
+  animation: nm-float 5.5s ease-in-out infinite;
+}
+
+.nm-login-brand-text {
+  position: relative;
+  text-align: center;
+  max-width: 460px;
+}
+
+.nm-login-site-name {
+  font-size: 42px;
+  font-weight: 700;
+  letter-spacing: 6px;
+  color: var(--nm-primary-deep);
+  margin: 0 0 10px;
+  line-height: 1.2;
+}
+
+.nm-login-slogan {
+  font-size: 15px;
+  line-height: 1.8;
+  color: var(--nm-ink-soft);
+  margin: 0;
+}
+
+.nm-login-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+}
+
+.nm-login-card {
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  background: var(--nm-surface);
+  border: 1px solid rgb(var(--nm-primary-rgb) / 14%);
+  border-radius: 20px;
+  box-shadow: 0 24px 64px rgb(var(--nm-primary-rgb) / 14%);
+  padding: 36px 36px 30px;
+  overflow: hidden;
+}
+
+/* 卡片顶部一条粉金斜条纹。纯装饰，用 ::before 而不是真元素，
+   免得被读屏念出来。 */
+.nm-login-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 5px;
+  background: repeating-linear-gradient(
+    -55deg,
+    var(--nm-primary) 0 10px,
+    var(--nm-gold) 10px 14px,
+    var(--nm-primary-deep) 14px 24px
+  );
+}
+
+.nm-login-title {
+  margin: 18px 0 4px;
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--nm-ink);
+  line-height: 1.3;
+}
+
+.nm-login-sub {
+  margin: 0 0 22px;
+  font-size: 14px;
+  color: var(--nm-ink-soft);
+}
+
+/* 登录 / 注册切换。用两个真按钮而不是 antd 的 Tabs：
+   分段控件的语义就是「二选一」，Tabs 会带来一套用不上的键盘与面板行为。 */
+.nm-login-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--nm-paper);
+}
+
+[data-theme='dark'] .nm-login-switch {
+  background: #241a1c;
+}
+
+.nm-login-switch button {
+  border: none;
+  background: transparent;
+  padding: 8px 0;
+  border-radius: 9px;
+  font-size: 14px;
+  color: var(--nm-ink-soft);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.nm-login-switch button:hover:not(.is-active) {
+  color: var(--nm-ink);
+}
+
+.nm-login-switch button.is-active {
+  background: var(--nm-surface);
+  color: var(--nm-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgb(0 0 0 / 8%);
+}
+
+.nm-login-foot {
+  margin: 14px 0 0;
+  font-size: 12px;
+  text-align: center;
+  color: var(--nm-ink-soft);
+}
+
+@media (max-width: 900px) {
+  .nm-login-brand {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .nm-login-card {
+    padding: 28px 22px 22px;
+    border-radius: 16px;
+  }
+}
+
+/* ── 作品卡（工作台）───────────────────────────────────────
+   悬停时把描边点亮成主色，并给一层很淡的主色投影 —— 彩翻的作品卡就是这么做的。
+   比加阴影更轻，也更适合「一片同尺寸卡片平铺」的网格：投影在密集网格里
+   会让整块区域显得很脏。
+
+   选择器带上 `.ant-card-hoverable` 是为了盖过 antd 自己的 hover 规则 ——
+   它给 `hoverable` 的卡片也加了投影，不提高优先级就盖不掉。 */
+
+.nm-project-card.ant-card-hoverable {
+  border-color: var(--nm-border);
+}
+
+.nm-project-card.ant-card-hoverable:hover {
+  border-color: var(--nm-primary);
+  box-shadow: 0 4px 16px rgb(var(--nm-primary-rgb) / 10%);
+}
+
 /* ── 窄屏适配 ──────────────────────────────────────────────
    内网工具以桌面为主，但手机上也要能用来看进度：核心是别让导航整个消失。 */
 
 .nm-header {
   padding: 0 24px;
   gap: 24px;
+}
+
+/* 画布上方的键位图例。左键/右键的区别记不住，得看得见 —— 小圆点用的是
+   与画布标记同一份色值（见 Canvas.tsx 的 MARKER_FILL）。 */
+.nm-marker-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--nm-ink-soft);
+}
+
+.nm-marker-legend i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
 }
 
 /* 状态 chips 在窄屏下横向滚动，而不是被截断成「待发…」。 */
@@ -88,30 +362,30 @@ body {
 
 .nm-file-card {
   position: relative;
-  border: 1px solid var(--comiku-border);
+  border: 1px solid var(--nm-border);
   border-radius: 10px;
   overflow: hidden;
-  background: var(--comiku-surface);
+  background: var(--nm-surface);
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .nm-file-card:hover {
-  border-color: var(--comiku-primary);
+  border-color: var(--nm-primary);
   box-shadow: 0 2px 10px rgb(0 0 0 / 6%);
 }
 
 /* 选中态用边框 + 底色，而不是仅靠复选框的勾 —— 扫一眼整片网格时，
    边框比一个小勾更容易辨认出「哪些被选中了」。 */
 .nm-file-card.is-selected {
-  border-color: var(--comiku-primary);
-  box-shadow: 0 0 0 2px rgb(240 131 106 / 25%);
+  border-color: var(--nm-primary);
+  box-shadow: 0 0 0 2px rgb(var(--nm-primary-rgb) / 25%);
 }
 
 .nm-file-thumb {
   position: relative;
   width: 100%;
   aspect-ratio: 3 / 4;
-  background: var(--comiku-border);
+  background: var(--nm-border);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -191,8 +465,9 @@ body {
 
 /* 暗色下这几处半透明白底会变成刺眼的亮块，换成深色底。 */
 [data-theme='dark'] .nm-file-check,
-[data-theme='dark'] .nm-file-actions {
-  background: rgb(38 33 31 / 88%);
+[data-theme='dark'] .nm-file-actions,
+[data-theme='dark'] .nm-file-open {
+  background: rgb(28 28 28 / 88%);
 }
 
 /* ── 翻校工作台 ────────────────────────────────────────────
@@ -202,8 +477,9 @@ body {
 .nm-translate {
   display: flex;
   flex-direction: column;
-  /* 撑满视口减去顶部导航，画布才能真正「大」起来 */
-  height: calc(100vh - 92px);
+  /* 撑满视口减去顶部导航，画布才能真正「大」起来。
+     用变量而不是写死的 92px —— 顶栏高度一改，这里会静默错位。 */
+  height: calc(100vh - var(--nm-header-h) - 28px);
   gap: 10px;
 }
 
@@ -215,8 +491,8 @@ body {
   flex-wrap: wrap;
   padding: 8px 12px;
   border-radius: 12px;
-  background: var(--comiku-surface);
-  border: 1px solid var(--comiku-border);
+  background: var(--nm-surface);
+  border: 1px solid var(--nm-border);
   flex: none;
 }
 
@@ -250,8 +526,8 @@ body {
   flex-direction: column;
   min-height: 0;
   border-radius: 12px;
-  border: 1px solid var(--comiku-border);
-  background: var(--comiku-surface);
+  border: 1px solid var(--nm-border);
+  background: var(--nm-surface);
   overflow: hidden;
 }
 
@@ -261,7 +537,7 @@ body {
   min-height: 320px;
   border-radius: 12px;
   overflow: hidden;
-  border: 1px solid var(--comiku-border);
+  border: 1px solid var(--nm-border);
 }
 
 .nm-canvas-zoom {
@@ -289,6 +565,54 @@ body {
   background: rgb(255 255 255 / 15%);
 }
 
+/* 标号浮层：悬停或选中标记时，就地显示这一格的译文。
+   译文不再画在图上（那会把画面挡住），但「这句话大概多长、压在哪儿」
+   是译者判断断行时要看的，所以不能只留在右侧列表里。 */
+.nm-marker-pop {
+  position: absolute;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 96%);
+  border: 1px solid rgb(var(--nm-primary-rgb) / 25%);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+  /* 不吃鼠标事件：它盖在图上，可交互就会挡住下面标号的点选。 */
+  pointer-events: none;
+}
+
+[data-theme='dark'] .nm-marker-pop {
+  background: rgb(28 28 28 / 96%);
+}
+
+.nm-marker-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--nm-ink-soft);
+  margin-bottom: 4px;
+}
+
+.nm-marker-pop-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.nm-marker-pop-text {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--nm-ink);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 168px;
+  overflow: hidden;
+}
+
+.nm-marker-pop-empty {
+  color: var(--nm-ink-soft);
+}
+
 .nm-canvas-hint {
   position: absolute;
   inset: 0;
@@ -307,7 +631,7 @@ body {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--comiku-border);
+  border-bottom: 1px solid var(--nm-border);
   flex: none;
   min-height: 42px;
 }
@@ -327,12 +651,12 @@ body {
 }
 
 .nm-source-item:hover {
-  background: rgb(240 131 106 / 5%);
+  background: rgb(var(--nm-primary-rgb) / 5%);
 }
 
 .nm-source-item.is-selected {
-  border-color: var(--comiku-primary);
-  background: rgb(240 131 106 / 8%);
+  border-color: var(--nm-primary);
+  background: rgb(var(--nm-primary-rgb) / 8%);
 }
 
 .nm-source-head {
@@ -346,7 +670,7 @@ body {
 .nm-source-origin {
   padding: 0 0 4px;
   font-size: 12px;
-  color: var(--comiku-ink-soft);
+  color: var(--nm-ink-soft);
 }
 
 .nm-source-issues {

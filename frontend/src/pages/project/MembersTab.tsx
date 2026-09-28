@@ -20,7 +20,7 @@ import {
   projectApi,
   type ProjectMemberRow,
 } from '../../api/client';
-import { comiku } from '../../theme';
+import { palette } from '../../theme';
 import type { ProjectTabProps } from './index';
 
 /**
@@ -112,7 +112,7 @@ export function MembersTab({ detail, reload, can, goTab }: ProjectTabProps) {
       key: 'member',
       render: (_, row) => (
         <Space size={8}>
-          <Avatar size={28} style={{ background: comiku.primary, fontSize: 12 }} src={row.avatarKey ?? undefined}>
+          <Avatar size={28} style={{ background: palette.primary, fontSize: 12 }} src={row.avatarKey ?? undefined}>
             {row.displayName.slice(0, 1)}
           </Avatar>
           <Space direction="vertical" size={0}>
@@ -133,7 +133,7 @@ export function MembersTab({ detail, reload, can, goTab }: ProjectTabProps) {
         if (!manageable || !can('project.member.manage')) {
           return (
             <Space size={6}>
-              <Tag color={comiku.primary} style={{ marginInlineEnd: 0 }}>
+              <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
                 {row.roleName}
               </Tag>
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
