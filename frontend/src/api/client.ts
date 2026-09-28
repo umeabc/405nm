@@ -72,9 +72,14 @@ export function uploadWithProgress<T>(
   file: File,
   onProgress?: (loaded: number, total: number) => void,
   signal?: AbortSignal,
+  /** 额外的普通表单字段（如成品回传要带的 language / note）。 */
+  fields?: Record<string, string>,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const form = new FormData();
+    // 字段排在文件前面：当前后端是读完所有 part 才用这些字段的，顺序其实无所谓，
+    // 但字段在前让请求体在 devtools 里一眼能读，也不必依赖那个实现细节。
+    for (const [key, value] of Object.entries(fields ?? {})) form.append(key, value);
     form.append('file', file, file.name);
 
     const xhr = new XMLHttpRequest();
@@ -308,6 +313,8 @@ export type ProjectFileRow = {
   state: string;
   revision: number;
   activated: boolean;
+  /** 已回传的成品数量（所有语言、所有版本）。0 表示还没嵌完字。 */
+  outputCount: number;
   deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
@@ -521,6 +528,95 @@ export const fileApi = {
    */
   mediaUrl: (fileId: string, variant: 'raw' | 'thumb' | 'preview' = 'thumb') =>
     `${BASE}/files/${fileId}/media/${variant}`,
+};
+
+// ── 嵌字成品 ────────────────────────────────────────────────
+
+export type OutputRow = {
+  id: string;
+  language: string;
+  version: number;
+  name: string;
+  size: number;
+  width: number;
+  height: number;
+  note: string;
+  createdBy: string | null;
+  createdByName: string;
+  createdAt: string;
+};
+
+export const outputApi = {
+  list: (fileId: string) => apiRequest<{ outputs: OutputRow[]; count: number }>(`/files/${fileId}/outputs`),
+
+  /**
+   * 回传成品。
+   *
+   * 走 XHR（与图片上传同一条路）：成品是整页大图，几十 MB 很常见，
+   * 没有进度条的等待会让人以为卡死了。
+   */
+  upload: (
+    fileId: string,
+    file: File,
+    options: { language?: string; note?: string } = {},
+    onProgress?: (loaded: number, total: number) => void,
+    signal?: AbortSignal,
+  ) =>
+    uploadWithProgress<{ ok: true; output: OutputRow; hint: string }>(
+      `/files/${fileId}/outputs`,
+      file,
+      onProgress,
+      signal,
+      {
+        ...(options.language ? { language: options.language } : {}),
+        ...(options.note ? { note: options.note } : {}),
+      },
+    ),
+
+  remove: (fileId: string, outputId: string) =>
+    apiRequest<{ ok: true; remaining: number }>(`/files/${fileId}/outputs/${outputId}`, { method: 'DELETE' }),
+
+  mediaUrl: (fileId: string, outputId: string, variant: 'raw' | 'thumb' | 'preview' = 'thumb') =>
+    `${BASE}/files/${fileId}/outputs/${outputId}/media/${variant}`,
+};
+
+// ── 导出 ────────────────────────────────────────────────────
+
+export type ExportPreview = {
+  project: { id: string; name: string };
+  language: string;
+  targetLabel: string;
+  fileCount: number;
+  markerStats: {
+    total: number;
+    translated: number;
+    fallbackToSource: number;
+    empty: number;
+    proofread: number;
+  };
+  filesWithoutTranslation: string[];
+};
+
+export const exportApi = {
+  targets: (projectId: string) =>
+    apiRequest<{ targets: Array<{ id: string; language: string; label: string }> }>(
+      `/projects/${projectId}/exports/targets`,
+    ),
+
+  preview: (projectId: string, targetId: string) =>
+    apiRequest<ExportPreview>(`/projects/${projectId}/exports/preview?targetId=${targetId}`),
+
+  /**
+   * 下载地址。做成 URL 而不是 `apiRequest` 拿 blob：
+   * 包可能有几百 MB，先整个读进内存再触发下载会把标签页拖垮；
+   * 交给浏览器直接导航，它自己会流式落盘、还能显示下载进度。
+   */
+  labelPlusUrl: (projectId: string, targetId: string) =>
+    `${BASE}/projects/${projectId}/exports/labelplus?targetId=${targetId}`,
+  projectZipUrl: (projectId: string, targetId: string) =>
+    `${BASE}/projects/${projectId}/exports/project.zip?targetId=${targetId}`,
+  outputsZipUrl: (projectId: string, targetId: string) =>
+    `${BASE}/projects/${projectId}/exports/outputs.zip?targetId=${targetId}`,
 };
 
 // ── 标号 / 译文 / 状态 / 署名 / 通知（M3 翻校）──────────────

@@ -68,6 +68,7 @@ export {
   monthShard,
   newAvatarKey,
   newFileKey,
+  newOutputKey,
   newSiteBrandKey,
   safeImageExt,
   variantKey,

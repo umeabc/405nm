@@ -1,8 +1,10 @@
 import {
   DeleteOutlined,
   EditOutlined,
+  ExportOutlined,
   InboxOutlined,
   LinkOutlined,
+  PictureOutlined,
   ReadOutlined,
   SwapOutlined,
   UploadOutlined,
@@ -28,8 +30,10 @@ import type React from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, fileApi, translateApi, type ProjectFileRow } from '../../api/client';
+import { ExportModal } from '../../components/ExportModal';
 import { FileMoveModal } from '../../components/FileMoveModal';
 import { ImportModal } from '../../components/ImportModal';
+import { OutputModal } from '../../components/OutputModal';
 import { UploadModal } from '../../components/UploadModal';
 import { useClientConfig } from '../../hooks/useClientConfig';
 import { palette } from '../../theme';
@@ -86,6 +90,9 @@ export function FilesTab({
   const [stats, setStats] = useState<Record<string, { sources: number; translated: number; proofread: number }>>({});
 
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  /** 正在看哪张图的成品。null = 弹窗关着。 */
+  const [outputTarget, setOutputTarget] = useState<ProjectFileRow | null>(null);
 
   const queueRef = useRef<File[]>([]);
   const flushTimer = useRef<number | null>(null);
@@ -187,6 +194,16 @@ export function FilesTab({
               }}
             >
               开始翻校
+            </Button>
+          ) : null}
+          {can('tra.output') ? (
+            <Button
+              size="small"
+              icon={<ExportOutlined />}
+              disabled={files.length === 0}
+              onClick={() => setExporting(true)}
+            >
+              导出嵌字包
             </Button>
           ) : null}
           <Input.Search
@@ -356,6 +373,21 @@ export function FilesTab({
                           {STATE_LABEL[file.state] ?? file.state}
                         </Typography.Text>
                         {fileStat( stats, file.id )}
+                        {/* 成品数直接标在卡上：嵌字进度是这一页最需要一眼看到的信息，
+                            否则得逐张点开弹窗才知道哪张还没回传。 */}
+                        {file.outputCount > 0 ? (
+                          <Tooltip title={`已回传 ${file.outputCount} 版成品`}>
+                            <Button
+                              size="small"
+                              type="text"
+                              style={{ padding: 0, height: 16, fontSize: 10, color: palette.success }}
+                              icon={<PictureOutlined />}
+                              onClick={() => setOutputTarget(file)}
+                            >
+                              {file.outputCount}
+                            </Button>
+                          </Tooltip>
+                        ) : null}
                       </Space>
                     </div>
 
@@ -366,6 +398,18 @@ export function FilesTab({
                           size="small"
                           icon={<ReadOutlined />}
                           onClick={() => navigate(`/projects/${projectId}/workbench/${file.id}`)}
+                        />
+                      </Tooltip>
+                    ) : null}
+
+                    {!deleted && can('file.typeset') && file.outputCount === 0 ? (
+                      <Tooltip title="回传嵌字成品">
+                        <Button
+                          className="nm-file-open"
+                          size="small"
+                          icon={<PictureOutlined />}
+                          style={{ right: 34 }}
+                          onClick={() => setOutputTarget(file)}
                         />
                       </Tooltip>
                     ) : null}
@@ -447,6 +491,22 @@ export function FilesTab({
           void load();
           void reload();
         }}
+      />
+
+      <ExportModal
+        open={exporting}
+        projectId={projectId}
+        onClose={() => setExporting(false)}
+      />
+
+      <OutputModal
+        open={outputTarget !== null}
+        fileId={outputTarget?.id ?? null}
+        fileName={outputTarget?.name ?? ''}
+        canUpload={can('file.typeset')}
+        onClose={() => setOutputTarget(null)}
+        // 上传/删除之后要刷新网格上的成品数，否则徽标还停在旧数字上
+        onChanged={() => void load()}
       />
 
       <Modal

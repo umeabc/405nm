@@ -11,7 +11,7 @@
 | M2 | 作品集 / 作品 / 文件、存储抽象、缩略图与预览图、媒体字节流、团队级 MD5 去重、工作台 | ✅ |
 | M3 | 标号（**打点式**，框内/框外）与译文（多候选）、校对、显式状态机、署名台账、下游通知、翻校工作台、图片跨作品移动 | ✅ |
 | M4 | 图源采集：7 类图源解析、持久化导入任务（可续跑）、多份具名凭据 | ✅ |
-| M5 | 导出（LabelPlus / 分层 PSD / PS 脚本）与成品回传 | 未开始 |
+| M5 | 导出（LabelPlus txt / 工程包 / 成品包）与成品回传、状态推进到已嵌字 | ✅（分层 PSD 见下） |
 | M6 | 发布（B 站，Postgres 队列 + 幂等 + 租约） | 未开始 |
 | M7 | 从旧站迁移（含图片与署名台账） | 未开始 |
 | M8 | AI 机翻（OCR + 自动标号 + 大模型回填） | 未开始 |
@@ -75,6 +75,59 @@ sharp 的预编译产物要求 CPU 支持 **x86-64-v2**（SSE4.2 / POPCNT 等）
 
 导入任务由 **worker** 执行（backend 绝不起这个循环），前端 1.5s 轮询一次进度。
 
+## 导出与成品（离线嵌字闭环）
+
+```
+导出工程包（原图 + txt + manifest） → PS 里用 LabelPlus 脚本嵌字 → 回传成品 → 标记「已嵌字」 → 成品包
+```
+
+三条导出：
+
+| 接口 | 内容 |
+|---|---|
+| `GET /projects/:id/exports/labelplus?targetId=` | LabelPlus txt，只有译文清单 |
+| `GET /projects/:id/exports/project.zip?targetId=` | 工程包：原图 + txt + `manifest.json` + `说明.txt` |
+| `GET /projects/:id/exports/outputs.zip?targetId=` | 成品包：各图在该语言下的**最新**成品 |
+
+成品回传用 `POST /files/:id/outputs`（multipart），版本号按 `(文件, 语言)` 各自从 1 递增，
+**最新版本即当前版本**（表里没有 `is_current` 列 —— 少一个需要维护的不变量）。
+状态机进 `typeset` 的前置条件就是这张表里有行。
+
+### LabelPlus txt 的格式是反推出来的，不要随手改
+
+这个格式没有正式规范，唯一权威是**消费它的那两样东西**：LabelPlus 本体与官方 PS 脚本。
+序列化在 `packages/shared/src/labelplus.ts`，每一处细节的来由都写在注释里。几条硬约束：
+
+- **头部**是 `1.0,1.0` / `-` / 组名若干行 / `-` / 注释 / `-`。官方 `readStartBlocks()`
+  把「第一个文件头之前的内容」按 `-` 切开取 `blocks[1]` 当组名 ——
+  **组名里绝不能出现 `-`**，否则组被切碎、组号整体错位（表现为「译文全串到别的组」）。
+- 官方 `judgeLineType()` 是**前缀匹配**：文件头前 6 字符是 `>`、标号头前 6 字符是 `-`，
+  所以 `>`/`<`/`-` 的数量下限是 6。我们统一用 6。
+- 组名顺序即组号，**1 = 框内、2 = 框外**，正好对上标号的 `position_type`。
+- 坐标是**归一化 0–1、4 位小数**。官方 PS 脚本按「两个分量都 ≤1」判定这是归一化值再乘画布尺寸，
+  混入像素值会被当成越界直接丢到画布外。
+- **连空译文也要写一行**。官方解析器的收尾规则是「最后一行若是标号头则不收尾」，
+  文件以标号头结尾时那个标号会被整条丢掉。
+- **txt 里的文件名与压缩包里的条目名必须逐字一致**（都由 `dedupeLpFilenames` 算一次）。
+  两边分叉的后果是 PS 脚本一个标号都嵌不上，**而且不报错**。
+
+`tests/shared-verify.mjs` 里有一节专门做这件事：它**照官方脚本的算法重实现了一遍解析器**，
+用那个解析器去读我们的输出。自洽只能证明自己跟自己一致，这样才拦得住格式漂移。
+
+### 关于 PS 脚本
+
+**本仓库不附带 PS 脚本。** 嵌字用 LabelPlus 官方的 `LabelPlus_Ps_Script.jsx`，
+从 LabelPlus 项目自行获取（它以 GPLv2 发布，是否收进本仓库由仓库所有者决定）。
+工程包的 `说明.txt` 里写了获取方式、安装步骤，以及 txt 格式说明 ——
+不想用官方脚本、想自己写工具的话，照着那份说明和 `manifest.json` 就够。
+
+### 还没做的：分层 PSD 导出
+
+原计划里 M5 还有一项「服务端直接生成分层 PSD」（用 ag-psd 写原生 TypeTool 文本图层，
+配一层底图）。它需要把图片解成**裸 RGBA** 喂给 ag-psd，而 Node 侧没有 canvas 时
+只能靠 libvips 命令行吐裸数据 —— 这条路还没验证过，所以没有先写代码。
+当前 txt + 官方脚本的组合已经能完整走通离线嵌字，PSD 由 PS 自己另存即可。
+
 ## 部署拓扑
 
 四个容器，与彩翻一致：
@@ -133,7 +186,7 @@ docker compose -f deploy/docker-compose.yml run --rm \
   -e M3_ADMIN_PASSWORD=... backend node /repo/tests/m3-verify.mjs
 ```
 
-`tests/` 下五个脚本：
+`tests/` 下六个脚本：
 
 | 脚本 | 覆盖 |
 |---|---|
@@ -141,7 +194,8 @@ docker compose -f deploy/docker-compose.yml run --rm \
 | `m2-verify.mjs` | 作品 / 文件 / 媒体字节流 / 去重 / 团队动态 |
 | `m3-verify.mjs` | 标号（含框内/框外与只读历史列）/ 译文 / 状态机 / 署名台账 / 通知 / 图片跨作品移动 |
 | `m4-verify.mjs` | 抓取客户端（浏览器指纹 JA4 回归护栏、失败分类、代理）+ 七类解析器 + 导入任务。加 `-e M4_LIVE=1` 才会真的出网 |
-| `shared-verify.mjs` | 排版算法（纯函数，`npm run test:shared` 本机可跑，42 项） |
+| `m5-verify.mjs` | 导出体检 / LabelPlus txt 的逐字节格式 / 工程包与成品包（解包校验条目名与 txt 一致）/ 成品版本与删除 / 跨作品越权 / 状态机进 `typeset` 的前置条件 |
+| `shared-verify.mjs` | 排版算法 + LabelPlus 往返（纯函数，`npm run test:shared` 本机可跑） |
 
 每个脚本都会打印「通过 N 项」并**在失败时以非零码退出**，脚本自带数据搭建、可反复执行，跑完留下的数据可当联调样本。造图用 `tests/lib/png.mjs` 里的最小 PNG 编码器（零依赖，共用一份）。
 

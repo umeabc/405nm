@@ -508,11 +508,22 @@ console.log('\n四、状态机');
   record('权限', '校对没有 file.typeset，被权限拦下（403）', byProofreader.status === 403, `HTTP ${byProofreader.status}`);
 
   // 有权限的人才会走到**前置条件**那一关：没有成品就不能标已嵌字。
+  //
+  // ⚠️ 这里曾经断言消息里有「M5 的环节」——那是 M5 还没做时的一句版本说明。
+  // 现在成品回传已经上线，那句话既过时又误导（用户刚传完成品却被告知功能没开放），
+  // 已经删掉了，所以改成断言**真正的那条理由**：缺的是成品。
   const byAdmin = await admin.post(`/files/${fileA}/state`, { to: 'typeset' });
+  const byAdminMsg = String(byAdmin.body?.message ?? '');
   record(
     '状态',
-    '有权限但没成品时被前置条件拦住，并说明是 M5 的环节',
-    byAdmin.status === 409 && String(byAdmin.body?.message ?? '').includes('M5'),
+    '有权限但没成品时被前置条件拦住，且理由点明缺「成品」',
+    byAdmin.status === 409 && byAdminMsg.includes('成品'),
+    JSON.stringify(byAdmin.body),
+  );
+  record(
+    '状态',
+    '不再提「尚未开放」这类版本说明（M5 已上线，说没开放就是假话）',
+    !byAdminMsg.includes('尚未开放') && !byAdminMsg.includes('M5'),
     JSON.stringify(byAdmin.body),
   );
 }

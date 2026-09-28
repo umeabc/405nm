@@ -59,3 +59,18 @@ export {
   type TextIssue,
   type TextIssueSeverity,
 } from './text-check.js';
+
+export {
+  LABELPLUS_GROUPS,
+  LP_VERSION,
+  dedupeLpFilenames,
+  groupIdOfPosition,
+  labelPlusDownloadName,
+  parseLabelPlus,
+  positionTypeOfGroup,
+  sanitizeLpFilename,
+  serializeLabelPlus,
+  type LpDocument,
+  type LpFile,
+  type LpMarker,
+} from './labelplus.js';

@@ -1,6 +1,6 @@
 import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db, type DbLike } from '../db/client.js';
-import { fileStates, files, projects, sources, targets, translations } from '../db/schema.js';
+import { fileStates, files, outputs, projects, sources, targets, translations } from '../db/schema.js';
 import type { ProjectAccess } from './authorize.js';
 import { requireProjectPermission } from './authorize.js';
 import { recordCredit } from './credits.js';
@@ -161,13 +161,18 @@ export async function translationCompleteness(
 /**
  * 成品数量。
  *
- * M3 还没有 `outputs` 表（成品回传是 M5 的嵌字环节），所以这里恒为 0 ——
- * 于是「标记为已嵌字」会被前置条件挡住。这是**有意的**：
- * 与其让状态机假装走得通，不如在正确的时机说清楚「这一环还没开放」。
- * M5 建表后，这个函数改成一次 count 即可，其余代码不用动。
+ * ⚠️ M3 时这里是**恒返回 0 的桩**（那时还没有 outputs 表），本意是让
+ * 「标记为已嵌字」被前置条件挡住、由提示语说明「这一环还没开放」。
+ * M5 把表建好之后必须接上真实的计数 —— 忘了接的后果是
+ * **「已嵌字」在生产环境里永远走不到**，而报错还说「该图片还没有回传成品」，
+ * 明明刚传过。这个漏接是 m5-verify 抓出来的。
  */
-async function outputCountFor(_fileId: string, _tx: DbLike = db): Promise<number> {
-  return 0;
+async function outputCountFor(fileId: string, tx: DbLike = db): Promise<number> {
+  const [row] = await tx
+    .select({ total: sql<number>`count(*)::int` })
+    .from(outputs)
+    .where(eq(outputs.fileId, fileId));
+  return Number(row?.total ?? 0);
 }
 
 export type TransitionInput = {
@@ -330,10 +335,10 @@ function describeBlocker(
   // 否则他会盯着自己按的按钮想不通。
   const prefix = stage === requested ? '' : `要推进到「${STATE_LABELS[requested]}」需要先过「${STATE_LABELS[stage]}」这一关：`;
 
-  // 嵌字这一环依赖 M5 的成品回传，说清楚是版本没到位而不是他做错了。
-  const hint = stage === 'typeset' ? '（成品回传是 M5 的嵌字环节，当前版本尚未开放）' : '';
-
-  return `${prefix}${withProgress}${hint}`;
+  // 嵌字这一环曾经附一句「M5 尚未开放」的说明（那时确实没有成品回传）。
+  // M5 做完之后那句话就成了**谎话**：用户明明刚传完成品，却被告知功能没开放。
+  // 现在前置条件的理由本身已经说清楚了，不需要额外的版本说明。
+  return `${prefix}${withProgress}`;
 }
 
 /** 文件的状态流水（含谁在什么时候推的），按时间倒序。 */

@@ -13,15 +13,23 @@
  */
 
 import {
+  LABELPLUS_GROUPS,
   MARKER_ARROW_HEIGHT,
   MARKER_CENTER_DY,
   MARKER_RADIUS,
   annotationRect,
   checkText,
+  dedupeLpFilenames,
+  groupIdOfPosition,
   groupVerticalRuns,
   hitTestMarker,
+  labelPlusDownloadName,
   layoutText,
   normalizeTextLayers,
+  parseLabelPlus,
+  positionTypeOfGroup,
+  sanitizeLpFilename,
+  serializeLabelPlus,
   wrapText,
   wrapVertical,
 } from '../packages/shared/dist/index.js';
@@ -322,6 +330,269 @@ console.log('\n六、标点检查');
 
 function hasError(issues) {
   return issues.some((i) => i.severity === 'error');
+}
+
+// ── 七、LabelPlus txt ──────────────────────────────────────
+//
+// 这一节的重点不是「自己写的解析器能读自己写的输出」（那只证明自洽），
+// 而是**照官方 PS 脚本的算法重实现一遍解析器**，用它来读我们的输出。
+// 格式漂移正是这样才会被发现：官方 `judgeLineType` 用前缀匹配
+// （`>>>>>>` / `------`），`readStartBlocks` 把起始块按 `-` 切开、
+// 再把组名按 `\r` 切 —— 横线少一根、组名里混进一个 `-`，都会让
+// **组号整体错位**，表现为「译文全串到别的组」，而这种错在界面上看不出来。
+console.log('\n七、LabelPlus txt');
+
+/** 官方 judgeLineType 的忠实移植（LabelPlus/PS-Script） */
+function officialJudgeLineType(input) {
+  const result = { Type: 'unknown', Title: '', Values: [''] };
+  let str = input.trim();
+  if (str.substr(0, 6) === '>>>>>>') {
+    str = str.slice(2 + str.indexOf('>['));
+    const index = str.search(/\]<{6,}$/);
+    if (index < 0) return result;
+    result.Title = str.substring(0, index);
+    result.Type = 'filehead';
+  } else if (str.substr(0, 6) === '------') {
+    str = str.slice(2 + str.indexOf('-['));
+    let index = str.search(/\]-{6,}\[/);
+    if (index < 0) return result;
+    result.Title = str.substring(0, index);
+    str = str.slice(2 + str.indexOf('-['));
+    index = str.search(/\]$/);
+    if (index < 0) return result;
+    str = str.substring(0, index);
+    result.Values = str.split(',');
+    result.Type = 'labelhead';
+  }
+  return result;
+}
+
+/** 官方 readStartBlocks 的忠实移植 */
+function officialReadStartBlocks(str) {
+  const blocks = str.split('-');
+  if (blocks.length < 3) return null;
+  const filehead = blocks[0].split(',');
+  if (filehead.length < 2) return null;
+  const groups = blocks[1].trim().split('\r').map((g) => g.trim());
+  return { Groups: groups };
+}
+
+/** 官方 lpTextParser 的忠实移植 */
+function officialParseLp(text) {
+  const body = text.replace(/^\uFEFF/, '');
+  const lines = body.split(/\r\n|\n|\r/);
+  let state = 'start';
+  let notDealStr = '';
+  let pending = null;
+  let nowFilename = null;
+  const labelData = new Map();
+  const filenameList = [];
+  let groups = null;
+  let lastType = 'unknown';
+
+  const push = () => {
+    if (nowFilename != null && pending) {
+      labelData.get(nowFilename).push({
+        Values: pending.Values,
+        // 官方是 notDealStr.trim()，而 notDealStr 每行都以 \r 拼接
+        Text: notDealStr.trim(),
+      });
+    }
+  };
+
+  for (const lineStr of lines) {
+    const msg = officialJudgeLineType(lineStr);
+    lastType = msg.Type;
+    if (msg.Type === 'filehead') {
+      if (state === 'start') {
+        const r = officialReadStartBlocks(notDealStr);
+        if (!r) return null;
+        groups = r.Groups;
+      } else if (state === 'context') {
+        push();
+      }
+      labelData.set(msg.Title, []);
+      filenameList.push(msg.Title);
+      nowFilename = msg.Title;
+      notDealStr = '';
+      state = 'filehead';
+    } else if (msg.Type === 'labelhead') {
+      // 起始块都没结束就遇到标号头 —— 官方在这里直接放弃整个文件
+      if (state === 'start') return null;
+      if (state === 'context') push();
+      notDealStr = '';
+      pending = msg;
+      state = 'context';
+    } else {
+      notDealStr += '\r' + lineStr;
+    }
+  }
+  // ⚠️ 官方只在「最后一行是普通文本」时才收尾。也就是说文件若以标号头结尾，
+  // 那个标号会被丢掉 —— 这正是我们序列化时**连空译文也要写一行**的原因。
+  if (state === 'context' && lastType === 'unknown') push();
+
+  if (!groups) return null;
+  return {
+    groups,
+    files: filenameList.map((name) => ({
+      filename: name,
+      labels: labelData.get(name).map((d) => ({
+        x: d.Values[0],
+        y: d.Values[1],
+        group: d.Values[2],
+        text: d.Text,
+      })),
+    })),
+  };
+}
+
+const sampleDoc = {
+  comment: ['作品：测试作品', '语言：zh-CN'],
+  files: [
+    {
+      filename: '001.jpg',
+      markers: [
+        { index: 1, x: 0.1, y: 0.2, positionType: 'in', text: '早上好' },
+        { index: 2, x: 0.3, y: 0.4, positionType: 'out', text: '第一行\n第二行' },
+      ],
+    },
+    {
+      filename: '002.jpg',
+      markers: [{ index: 1, x: 1, y: 1.5, positionType: 'in', text: '' }],
+    },
+  ],
+};
+
+{
+  const txt = serializeLabelPlus(sampleDoc);
+
+  record('输出以 BOM 开头', txt.charCodeAt(0) === 0xfeff, `首字符码 ${txt.charCodeAt(0)}`);
+  record(
+    '行尾全是 CRLF（没有裸 LF）',
+    !/[^\r]\n/.test(txt) && txt.includes('\r\n'),
+    JSON.stringify(txt.slice(0, 24)),
+  );
+
+  const official = officialParseLp(txt);
+  record('官方解析器能读出来（不是 null）', official !== null);
+
+  if (official) {
+    record(
+      '官方解析器读到的组名正好是 框内/框外',
+      JSON.stringify(official.groups) === JSON.stringify(['框内', '框外']),
+      JSON.stringify(official.groups),
+    );
+    record(
+      '官方解析器认出两个文件且文件名正确',
+      official.files.length === 2 &&
+        official.files[0].filename === '001.jpg' &&
+        official.files[1].filename === '002.jpg',
+      JSON.stringify(official.files.map((f) => f.filename)),
+    );
+    record(
+      '官方解析器读到的 x/y/组号正确',
+      JSON.stringify(official.files[0].labels.map((l) => [l.x, l.y, l.group])) ===
+        JSON.stringify([
+          ['0.1000', '0.2000', '1'],
+          ['0.3000', '0.4000', '2'],
+        ]),
+      JSON.stringify(official.files[0].labels.map((l) => [l.x, l.y, l.group])),
+    );
+    record(
+      '官方解析器读到的译文正确（含多行）',
+      official.files[0].labels[0].text === '早上好' &&
+        official.files[0].labels[1].text === '第一行\r第二行',
+      JSON.stringify(official.files[0].labels.map((l) => l.text)),
+    );
+    // 关键回归：官方收尾规则会吃掉「以标号头结尾」的标号
+    record(
+      '空译文的标号在官方解析器下仍然存在',
+      official.files[1].labels.length === 1 && official.files[1].labels[0].text === '',
+      JSON.stringify(official.files[1].labels),
+    );
+  }
+
+  record('坐标是 4 位小数', txt.includes('[0.1000,0.2000,1]'), '');
+  record('越界坐标被夹到 1（0–1 之外官方 PS 脚本会当像素值）', txt.includes('[1.0000,1.0000,1]'), '');
+
+  // 自己的解析器往返
+  const back = parseLabelPlus(txt);
+  record('往返后组名一致', JSON.stringify(back.groups) === JSON.stringify(['框内', '框外']), JSON.stringify(back.groups));
+  record('往返后文件数一致', back.files.length === 2, String(back.files.length));
+  record(
+    '往返后坐标一致',
+    back.files[0].markers[0].x === 0.1 && back.files[0].markers[0].y === 0.2,
+    JSON.stringify([back.files[0].markers[0].x, back.files[0].markers[0].y]),
+  );
+  record(
+    '往返后框内/框外一致',
+    back.files[0].markers[0].positionType === 'in' && back.files[0].markers[1].positionType === 'out',
+    JSON.stringify(back.files[0].markers.map((m) => m.positionType)),
+  );
+  record(
+    '往返后序号从 1 连续递增',
+    JSON.stringify(back.files[0].markers.map((m) => m.index)) === JSON.stringify([1, 2]),
+    JSON.stringify(back.files[0].markers.map((m) => m.index)),
+  );
+  record('往返后多行译文一致', back.files[0].markers[1].text === '第一行\n第二行', JSON.stringify(back.files[0].markers[1].text));
+  record('往返后空译文还是空', back.files[1].markers[0].text === '', JSON.stringify(back.files[1].markers[0].text));
+}
+
+{
+  // 文件名里的危险字符：`]` 与 `<` 会让官方正则截断标题，把标号挂到别的图上
+  record('文件名里的 ] 被清掉', sanitizeLpFilename('a]b.jpg') === 'a_b.jpg', sanitizeLpFilename('a]b.jpg'));
+  record('文件名里的 < 被清掉', sanitizeLpFilename('a<b.jpg') === 'a_b.jpg', sanitizeLpFilename('a<b.jpg'));
+  record('空文件名回落成 image', sanitizeLpFilename('   ') === 'image', sanitizeLpFilename('   '));
+
+  const deduped = dedupeLpFilenames(['001.jpg', '001.jpg', '001.jpg', 'noext']);
+  record(
+    '重名文件名被去重（重名会让后一张的标号覆盖前一张）',
+    JSON.stringify(deduped) === JSON.stringify(['001.jpg', '001_2.jpg', '001_3.jpg', 'noext']),
+    JSON.stringify(deduped),
+  );
+
+  const txt = serializeLabelPlus({ files: [{ filename: 'a]b.jpg', markers: [] }] });
+  const parsed = officialParseLp(txt);
+  record(
+    '带危险字符的文件名导出后官方解析器仍读得对',
+    parsed && parsed.files.length === 1 && parsed.files[0].filename === 'a_b.jpg',
+    parsed ? JSON.stringify(parsed.files.map((f) => f.filename)) : 'null',
+  );
+}
+
+{
+  // 组名里绝不能有 `-`：readStartBlocks 会把起始块切碎，组号整体错位
+  const txt = serializeLabelPlus({ files: [] });
+  const head = txt.split('>>>>>>')[0];
+  const groups = officialReadStartBlocks(head.replace(/^\uFEFF/, ''));
+  record(
+    '起始块能被官方 readStartBlocks 解析出 2 个非空组名',
+    groups && groups.Groups.length === 2 && groups.Groups.every((g) => g.length > 0),
+    groups ? JSON.stringify(groups.Groups) : 'null',
+  );
+  record('组名里不含 - （含 - 会让组号错位）', !LABELPLUS_GROUPS.some((g) => g.includes('-')), '');
+}
+
+{
+  record('框内映射到组 1', groupIdOfPosition('in') === 1, String(groupIdOfPosition('in')));
+  record('框外映射到组 2', groupIdOfPosition('out') === 2, String(groupIdOfPosition('out')));
+  record('组 2 反向映射回框外', positionTypeOfGroup(2) === 'out', positionTypeOfGroup(2));
+  record('组 3 及以后按框内处理（不丢组号）', positionTypeOfGroup(5) === 'in', positionTypeOfGroup(5));
+  record(
+    '下载文件名带上作品名与语言',
+    labelPlusDownloadName('作品A', 'zh-CN') === '作品A_zh-CN.txt',
+    labelPlusDownloadName('作品A', 'zh-CN'),
+  );
+  record(
+    '下载文件名里的路径字符被清掉',
+    labelPlusDownloadName('a/b:c', 'zh') === 'a_b_c_zh.txt',
+    labelPlusDownloadName('a/b:c', 'zh'),
+  );
+}
+
+{
+  const parsed = parseLabelPlus('随便一段不是 LabelPlus 的文字\n没有任何文件头');
+  record('解析非 LabelPlus 文本不抛错且返回空文件表', parsed.files.length === 0, JSON.stringify(parsed.files));
 }
 
 // ── 汇总 ────────────────────────────────────────────────────

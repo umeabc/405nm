@@ -574,6 +574,57 @@ export const translations = pgTable(
 );
 
 /**
+ * 成品（嵌字完成的图）。
+ *
+ * 离线嵌字流程的闭环落点：系统导出「原图 + 标号 + 译文」，嵌字的人在 PS 里做完
+ * 把成品传回来，记在这里。**状态机进 `typeset` 的前置条件就是这张表里有行**
+ * （见 workflow.ts 的 `outputCount`）—— 没有成品却说「已嵌字」是自欺。
+ *
+ * 几处刻意的取舍：
+ *
+ * 1. **语言存语言码文本，不存 `targets.id` 外键。** 成品是「某语言的成品图」
+ *    这个**既成事实**，不是对一行配置的引用：项目里把某个目标语言删掉，
+ *    已经嵌好的图不会因此变得不是那个语言了，不该跟着置空。
+ *    顺带避开「唯一键里带可空列」——那个坑在角色表上已经踩过一次。
+ * 2. **没有 `is_current` 列，最新版本即当前版本。** 多一列就要多维护一条
+ *    「每个文件恰有一行为真」的不变量，而嵌字返工只要重新传一次就自然成为最新，
+ *    不值得为它引入一份需要修复的状态。
+ * 3. **版本号按 (文件, 语言) 各自从 1 递增**，不是全局递增 —— 一部作品同时做
+ *    简繁两版时，「简体 v2」和「繁体 v2」是两件平行的事，混编会很乱。
+ */
+export const outputs = pgTable(
+  'outputs',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    fileId: uuid('file_id')
+      .notNull()
+      .references(() => files.id, { onDelete: 'cascade' }),
+    /** 语言码，如 zh-CN。空串表示「项目只有一个目标语言，没特意指定」 */
+    language: text('language').notNull().default(''),
+    /** 该文件在该语言下的第几版，从 1 起 */
+    version: integer('version').notNull().default(1),
+    storageKey: text('storage_key').notNull(),
+    /** 回传时的原始文件名。嵌字的人自己起的名字，保留下来便于对账 */
+    name: text('name').notNull().default(''),
+    size: bigint('size', { mode: 'number' }).notNull().default(0),
+    width: integer('width').notNull().default(0),
+    height: integer('height').notNull().default(0),
+    note: text('note').notNull().default(''),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // (文件, 语言, 版本) 唯一：让「并发回传拿到同一个版本号」直接失败而不是
+    // 悄悄产生两行 v2。插入前会先锁住文件行，所以正常情况下不会撞上。
+    uniqueIndex('outputs_file_language_version_uq').on(t.fileId, t.language, t.version),
+    index('outputs_file_idx').on(t.fileId, t.createdAt),
+  ],
+);
+
+/**
  * 署名台账。
  *
  * moeflow 把「谁翻译了这张图」存成文件上的**自由文本串**（多人用 `、` 连接），

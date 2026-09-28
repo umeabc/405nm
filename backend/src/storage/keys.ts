@@ -91,6 +91,16 @@ export function newFileKey(uuid: string, ext: string, now: Date = new Date()): s
   return `${STORAGE_PREFIX.files}${monthShard(now)}/${uuid}${ext}`;
 }
 
+/**
+ * 成品的键：`outputs/<yyyymm>/<uuid><ext>`。
+ *
+ * 与 `files/` 一样按年月分片，且和缩略图派生规则天然对齐
+ * （`variantKey` 只认最后一段，与前缀无关）。
+ */
+export function newOutputKey(uuid: string, ext: string, now: Date = new Date()): string {
+  return `${STORAGE_PREFIX.outputs}${monthShard(now)}/${uuid}${ext}`;
+}
+
 /** 头像类键（不带分片：头像数量比图片少两个数量级，分片反而多一层目录）。 */
 export function newAvatarKey(kind: 'user' | 'team', uuid: string, ext: string): string {
   const prefix = kind === 'user' ? STORAGE_PREFIX.userAvatars : STORAGE_PREFIX.teamAvatars;

@@ -5,7 +5,9 @@ import { env, isProduction } from '../env.js';
 import { AppError } from '../lib/errors.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerAuthRoutes } from './routes/auth.js';
+import { registerExportRoutes } from './routes/exports.js';
 import { registerFileRoutes } from './routes/files.js';
+import { registerOutputRoutes } from './routes/outputs.js';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerInsightRoutes } from './routes/insights.js';
 import { registerMoveRoutes } from './routes/move.js';
@@ -93,6 +95,8 @@ export async function buildServer(): Promise<FastifyInstance> {
       await registerMoveRoutes(api);
       await registerSourcingRoutes(api);
       await registerSourcingAdminRoutes(api);
+      await registerOutputRoutes(api);
+      await registerExportRoutes(api);
       await registerInsightRoutes(api);
     },
     { prefix: '/api' },

@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { naturalSortKey } from '@405nm/shared';
 import { db } from '../../db/client.js';
-import { fileStates, files, projects } from '../../db/schema.js';
+import { fileStates, files, outputs, projects } from '../../db/schema.js';
 import { requireProjectAccess, requireProjectPermission, requireTeamAccess } from '../../domain/authorize.js';
 import { ingestImage } from '../../domain/ingest-image.js';
 import { env } from '../../env.js';
@@ -97,6 +97,35 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
       .orderBy(asc(files.sortName))
       .limit(query.limit);
 
+    /*
+     * 成品数量单独查一次，再在内存里合并。
+     *
+     * ⚠️ 这里**不要**改回「在 select 里放相关子查询」那种写法。曾经写过：
+     *     select({ ...getTableColumns(files), outputCount: sql`(
+     *       SELECT count(*)::int FROM outputs o WHERE o.file_id = ${files.id})` })
+     * 结果是**恒为 0 且不报错**：`getTableColumns` 让选择列表里的列名不带表前缀，
+     * 于是 drizzle 把 `${files.id}` 也渲染成裸的 `"id"`；而在子查询的作用域里，
+     * `"id"` 解析到的是 `outputs o` 自己的 id，条件变成 `o.file_id = o.id`。
+     * 界面上的表现是「每张卡的成品数永远是 0」——没有任何报错，只有数字不对。
+     *
+     * 拆成两次查询就没有这种作用域歧义，代价只是一次按主键索引的聚合。
+     * 与 routes/translations.ts 里统计译文进度的做法一致。
+     */
+    const outputCounts = new Map<string, number>();
+    if (rows.length > 0) {
+      const countRows = await db
+        .select({ fileId: outputs.fileId, total: sql<number>`count(*)::int` })
+        .from(outputs)
+        .where(
+          inArray(
+            outputs.fileId,
+            rows.map((r) => r.id),
+          ),
+        )
+        .groupBy(outputs.fileId);
+      for (const row of countRows) outputCounts.set(row.fileId, Number(row.total ?? 0));
+    }
+
     const [counts] = await db
       .select({
         total: count(),
@@ -116,6 +145,7 @@ export async function registerFileRoutes(app: FastifyInstance): Promise<void> {
         state: row.state,
         revision: row.revision,
         activated: row.activated,
+        outputCount: outputCounts.get(row.id) ?? 0,
         deletedAt: row.deletedAt ? row.deletedAt.toISOString() : null,
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),

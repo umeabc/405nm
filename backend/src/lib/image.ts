@@ -177,12 +177,16 @@ export async function probeImage(
  * 尺寸取**应用 EXIF 方向之后**的值。手机直出的照片与部分扫图带方向标记，
  * 直接读元数据会拿到宽高颠倒的结果，界面上表现为「图是横的但占位框是竖的」。
  */
-export async function processImage(buffer: Buffer): Promise<ImageInfo> {
+export async function processImage(buffer: Buffer, options?: { maxMb?: number }): Promise<ImageInfo> {
   if (buffer.byteLength === 0) throw badRequest('文件内容为空', 'EMPTY_FILE');
 
-  const limitBytes = env.MAX_IMAGE_MB * 1024 * 1024;
+  // 上限可覆盖：成品的上限比原图宽（见 env.MAX_OUTPUT_MB 的说明），
+  // 但解码路径与两个变体完全一样，所以是同一个函数加一个参数，
+  // 而不是复制一份「处理成品用」的实现。
+  const maxMb = options?.maxMb ?? env.MAX_IMAGE_MB;
+  const limitBytes = maxMb * 1024 * 1024;
   if (buffer.byteLength > limitBytes) {
-    throw badRequest(`图片超过 ${env.MAX_IMAGE_MB}MB 上限`, 'FILE_TOO_LARGE');
+    throw badRequest(`图片超过 ${maxMb}MB 上限`, 'FILE_TOO_LARGE');
   }
 
   return gate.run(async () => {

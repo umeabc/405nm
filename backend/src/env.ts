@@ -34,6 +34,12 @@ const schema = z.object({
   STORAGE_DIR: z.string().default('./uploads'),
   /** 单张图片大小上限（MB）。彩翻的图多为 3–8MB，20MB 留足余量。 */
   MAX_IMAGE_MB: z.coerce.number().int().positive().default(20),
+  /**
+   * 成品图大小上限（MB）。**刻意比原图宽松**：成品是 PS 嵌完字导出的整页图，
+   * 同样是 2000×3000，带文字与描边的 PNG 能到几十 MB，用原图那道上限
+   * 会把正常的成品挡在门外 —— 而嵌字的人已经干完活了，被挡回去最伤士气。
+   */
+  MAX_OUTPUT_MB: z.coerce.number().int().positive().default(60),
   /** 缩略图长边（像素） */
   THUMB_SIZE: z.coerce.number().int().positive().default(520),
   /** 预览图长边（像素）。翻校画布用的就是它，2000 足够看清小字。 */
