@@ -51,6 +51,39 @@ const schema = z.object({
   LOGIN_MAX_FAILS: z.coerce.number().int().positive().default(5),
   RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60 * 60 * 1000),
 
+  // ── 图源抓取 ──────────────────────────────────────────────
+  /**
+   * 抓取用的出口代理。**留空 = 直连**。
+   *
+   * 部署环境的出口到 Pixiv / X / i.pximg.net 的**直连是不通的**（那几个域名的
+   * DNS 应答被污染成无关的地址，连 Google 都解析错），所以内网部署必须配上它。
+   *
+   * ⚠️ 这个值是**内网拓扑**，仓库是公开的 —— 具体地址只写在各部署机的
+   * `deploy/.env`（已被 gitignore），**不要**写进 `.env.example`、compose 或文档。
+   *
+   * 协议由 impit 支持：http / https / socks4 / socks5。
+   * 这里只校验「解析得出一个带 host 的 URL」——写错了就让进程起不来，
+   * 比跑到第一次抓取才报错好。
+   */
+  SOURCING_PROXY: z.preprocess(
+    // compose 里用 ${SOURCING_PROXY:-} 传进来的是空串，要当成「未设置」。
+    (v) => (v === '' || v === undefined ? undefined : v),
+    z
+      .string()
+      .refine((value) => {
+        try {
+          return new URL(value).host !== '';
+        } catch {
+          return false;
+        }
+      }, 'SOURCING_PROXY 必须是一个完整的代理地址，例如 http://主机:端口')
+      .optional(),
+  ),
+  /** 单次抓取请求的超时（毫秒）。图源接口偶尔很慢，20s 是留了余量的值。 */
+  SOURCING_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
+  /** 抓取并发上限。调高会被上游判定为爬虫，也会先把自己的出口压垮。 */
+  SOURCING_CONCURRENCY: z.coerce.number().int().positive().default(4),
+
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 

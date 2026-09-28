@@ -64,6 +64,12 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # 留空 = 跟随 NODE_ENV。内网纯 HTTP 测试环境需显式设为 false，否则浏览器拒收 Secure Cookie。
       COOKIE_SECURE: ${COOKIE_SECURE:-}
+      # 图源抓取的出口代理。**留空 = 直连**。
+      # 内网出口到 Pixiv / X 的直连不通（DNS 被污染），部署时必须填。
+      # 具体地址属于内网拓扑，只写在各部署机的 deploy/.env 里，不进仓库。
+      SOURCING_PROXY: ${SOURCING_PROXY:-}
+      SOURCING_TIMEOUT_MS: ${SOURCING_TIMEOUT_MS:-20000}
+      SOURCING_CONCURRENCY: ${SOURCING_CONCURRENCY:-4}
     volumes:
       # 图片落盘目录，backend 与 worker 共享
       - uploads:/data/uploads

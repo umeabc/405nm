@@ -6,6 +6,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { env } from '../env.js';
 import { AppError, badRequest } from './errors.js';
+import { Semaphore } from './semaphore.js';
 
 /**
  * 图片处理：探测尺寸、算摘要、生成缩略图与预览图。
@@ -66,28 +67,9 @@ export type ImageInfo = {
  * 并发闸门。libvips 解码一张大图的峰值内存是「宽 × 高 × 通道数」，
  * 不设上限时十来张并发上传就能把 256MB 的容器打爆（表现为容器被杀，
  * 日志里只留一句 OOM，什么都查不到）。与图译空间取齐，用 2。
+ *
+ * 实现来自 `lib/semaphore.ts` —— 图源抓取那边也要用同一套排队语义。
  */
-class Semaphore {
-  private active = 0;
-  private readonly waiting: Array<() => void> = [];
-
-  constructor(private readonly limit: number) {}
-
-  async run<T>(task: () => Promise<T>): Promise<T> {
-    if (this.active >= this.limit) {
-      await new Promise<void>((resolve) => this.waiting.push(resolve));
-    }
-    this.active += 1;
-    try {
-      return await task();
-    } finally {
-      this.active -= 1;
-      const next = this.waiting.shift();
-      if (next) next();
-    }
-  }
-}
-
 const gate = new Semaphore(env.IMAGE_CONCURRENCY);
 const execFileAsync = promisify(execFile);
 

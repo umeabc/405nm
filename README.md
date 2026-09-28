@@ -25,6 +25,7 @@
 | 数据 | PostgreSQL 16 + Drizzle ORM |
 | Worker | 同后端镜像、不同入口（调度器 / 抓取 / AI 批量） |
 | 存储 | 抽象层，v1 只实现 local 驱动 |
+| 图源抓取 | `impit`（Rust，真 Chrome 的 TLS + HTTP/2 指纹）；**必须配出口代理**，见下 |
 | 图像处理 | **Debian 的 libvips 命令行**（见下方说明） |
 
 ### 为什么图像处理用 libvips 命令行而不是 sharp
@@ -32,6 +33,17 @@
 sharp 的预编译产物要求 CPU 支持 **x86-64-v2**（SSE4.2 / POPCNT 等），而被虚拟化的机器经常只暴露最基础的 x86-64 —— 测试机上 `/proc/cpuinfo` 的 model name 就是「Common KVM processor」，容器一启动就报 `Unsupported CPU: Prebuilt binaries for Linux x64 require v2 microarchitecture`。sharp 自带的 WebAssembly 兜底也走不通（V8 在缺指令集的 CPU 上会禁用 Wasm SIMD）。
 
 改成 `apt-get install libvips-tools` 后，发行版二进制按基线 x86-64 编译，任何机器都能跑 —— 可移植性反而比 sharp 更好，而且底下是同一个引擎（sharp 就是 libvips 的绑定）。代价只是每张图多一次进程启动，相对于解码本身可以忽略。
+
+### 图源抓取为什么要走代理
+
+内网出口到 Pixiv / X / 图床的**直连是不通的**：那几个域名的 DNS 应答会被污染成
+无关地址（`www.pixiv.net` 与 `www.google.com` 会解析到同一个第三方网段），
+与客户端无关。所以内网部署必须在 `deploy/.env` 里配上 `SOURCING_PROXY`，
+留空则直连。
+
+客户端固定用 `impit`，不做「用哪个客户端」的开关 —— 指纹只有在单一入口上才不会
+被某条支路悄悄绕过。选它的依据、以及「为什么 Node 原生的 fetch 与 http2 都不够」
+见 `docs/m4-sourcing-spike.md`。
 
 ## 部署拓扑
 
@@ -98,7 +110,8 @@ docker compose -f deploy/docker-compose.yml run --rm \
 | `m1-verify.mjs` | 身份 / 团队 / 权限 / 邀请码 / 站点后台 / 站点品牌与立绘 |
 | `m2-verify.mjs` | 作品 / 文件 / 媒体字节流 / 去重 / 团队动态 |
 | `m3-verify.mjs` | 标号（含框内/框外与只读历史列）/ 译文 / 状态机 / 署名台账 / 通知 / 图片跨作品移动 |
-| `shared-verify.mjs` | 排版算法（纯函数，`npm run test:shared` 本机可跑，37 项） |
+| `m4-verify.mjs` | 抓取客户端：浏览器指纹（JA4 回归护栏）、失败分类、代理是否生效 |
+| `shared-verify.mjs` | 排版算法（纯函数，`npm run test:shared` 本机可跑，42 项） |
 
 前三个各自会打印「通过 N 项」并**在失败时以非零码退出**，脚本自带数据搭建、可反复执行，跑完留下的数据可当联调样本。造图用 `tests/lib/png.mjs` 里的最小 PNG 编码器（零依赖，三个脚本共用一份）。
 
