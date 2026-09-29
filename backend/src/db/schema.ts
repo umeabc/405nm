@@ -1197,6 +1197,97 @@ export const publishAttempts = pgTable(
   ],
 );
 
+// ── AI 机翻（M8）────────────────────────────────────────────
+
+/**
+ * 大模型接入配置。**按用户各配各的**（旧站是全站单例，这里刻意改成每人一份）：
+ * 机翻是谁点谁付费、谁的 key 谁负责，用共享 key 会让「谁把额度用完了」无从追查。
+ *
+ * `apiKey` 与图源凭据走同一套 AES-256-GCM 加密（`lib/credentials.ts`），
+ * 接口一律只回掩码；`baseUrl` 允许指向自建/内网的 OpenAI 兼容服务。
+ */
+export const aiProviders = pgTable(
+  'ai_providers',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** OpenAI 兼容根地址，形如 `https://api.openai.com/v1`（不带尾斜杠） */
+    baseUrl: text('base_url').notNull(),
+    /** 加密后的 { apiKey } */
+    credentials: text('credentials').notNull().default(''),
+    /** 只出文字的模型（翻译、术语等） */
+    chatModel: text('chat_model').notNull().default(''),
+    /** 能看图的模型（识别标号）；留空表示这个通道不接 OCR */
+    visionModel: text('vision_model').notNull().default(''),
+    /** 出网代理；留空 = 直连。地址属于内网拓扑，接口只回掩码 */
+    proxyUrl: text('proxy_url').notNull().default(''),
+    isDefault: boolean('is_default').notNull().default(false),
+    enabled: boolean('enabled').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('ai_providers_user_idx').on(t.userId)],
+);
+
+/**
+ * 术语库。**归属团队**（术语是团队资产，不是个人笔记）：机翻时命中术语的译文优先。
+ * 旧站的术语库是三张表（库 / 组 / 词），这里压成两张 —— 组只用来分类，
+ * 而「分类」在自建工具里几乎没人维护，压掉换来的是一整套少写的增删改查。
+ */
+export const termBanks = pgTable(
+  'term_banks',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    intro: text('intro').notNull().default(''),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('term_banks_team_name_uq').on(t.teamId, t.name)],
+);
+
+/**
+ * 术语条目。`language` 是**目标语言**：同一个原文在不同目标语言下译法不同，
+ * 所以唯一键是 (库, 语言, 原文) 而不是 (库, 原文)。
+ */
+export const terms = pgTable(
+  'terms',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    bankId: uuid('bank_id')
+      .notNull()
+      .references(() => termBanks.id, { onDelete: 'cascade' }),
+    language: text('language').notNull(),
+    source: text('source').notNull(),
+    target: text('target').notNull(),
+    note: text('note').notNull().default(''),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('terms_bank_lang_source_uq').on(t.bankId, t.language, t.source),
+    index('terms_bank_lang_idx').on(t.bankId, t.language),
+  ],
+);
+
+export type AiProvider = typeof aiProviders.$inferSelect;
+export type TermBank = typeof termBanks.$inferSelect;
+export type Term = typeof terms.$inferSelect;
+
 export type PublishAccount = typeof publishAccounts.$inferSelect;
 export type CreditDirectoryEntry = typeof creditDirectory.$inferSelect;
 export type PublishTemplate = typeof publishTemplates.$inferSelect;

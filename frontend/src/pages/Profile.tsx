@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiError, authApi } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
+import { AiProviderCard } from '../components/AiProviderCard';
 import { PageHeader } from '../components/AppShell';
 
 type PasswordForm = { currentPassword: string; newPassword: string; confirmPassword: string };
@@ -103,6 +104,10 @@ export default function ProfilePage() {
           </Card>
         </Col>
       </Row>
+
+      <div style={{ marginTop: 16 }}>
+        <AiProviderCard />
+      </div>
     </>
   );
 }

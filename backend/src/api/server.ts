@@ -4,6 +4,7 @@ import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import { env, isProduction } from '../env.js';
 import { AppError } from '../lib/errors.js';
 import { registerAdminRoutes } from './routes/admin.js';
+import { registerAiRoutes } from './routes/ai.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerExportRoutes } from './routes/exports.js';
 import { registerFileRoutes } from './routes/files.js';
@@ -17,6 +18,7 @@ import { registerSiteRoutes } from './routes/site.js';
 import { registerSourcingAdminRoutes, registerSourcingRoutes } from './routes/sourcing.js';
 import { registerSourceRoutes } from './routes/sources.js';
 import { registerTeamRoutes } from './routes/teams.js';
+import { registerTermRoutes } from './routes/terms.js';
 import { registerTranslationRoutes } from './routes/translations.js';
 import { registerWorkflowRoutes } from './routes/workflow.js';
 
@@ -100,6 +102,8 @@ export async function buildServer(): Promise<FastifyInstance> {
       await registerExportRoutes(api);
       await registerPublishRoutes(api);
       await registerInsightRoutes(api);
+      await registerTermRoutes(api);
+      await registerAiRoutes(api);
     },
     { prefix: '/api' },
   );

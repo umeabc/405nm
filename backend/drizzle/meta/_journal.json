@@ -71,6 +71,13 @@
       "when": 1790656146744,
       "tag": "0009_legal_zeigeist",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790666751514,
+      "tag": "0010_square_callisto",
+      "breakpoints": true
     }
   ]
 }

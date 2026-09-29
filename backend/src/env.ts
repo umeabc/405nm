@@ -105,6 +105,22 @@ const schema = z.object({
   SOURCING_TIMEOUT_MS: z.coerce.number().int().positive().default(20000),
   /** 抓取并发上限。调高会被上游判定为爬虫，也会先把自己的出口压垮。 */
   SOURCING_CONCURRENCY: z.coerce.number().int().positive().default(4),
+
+  // ── AI 机翻（M8）────────────────────────────────────────
+  /** 单次模型调用超时（毫秒）。看图识别的响应通常比纯文字慢得多，默认给足 2 分钟。 */
+  AI_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
+  /** 模型调用并发。按人计费的通道不适合默默并发，默认 2。 */
+  AI_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  /**
+   * 送给模型的术语表上限（条）。
+   *
+   * 术语表是**整库命中**的：库里几千条术语全塞进 prompt，既贵又会让模型走神。
+   * 做法与图译空间一致 —— 只带**这一批原文里真的出现过的**词（子串命中），
+   * 且总数不超过这个上限，超了就按「长词优先」截断。
+   */
+  AI_GLOSSARY_LIMIT: z.coerce.number().int().positive().default(150),
+  /** 一页最多接收多少个识别结果，防止模型吐回一大串噪声把库写满。 */
+  AI_MAX_MARKERS: z.coerce.number().int().positive().default(60),
   /**
    * 图源凭据的加密密钥。**没配就从 SESSION_SECRET 派生**。
    *

@@ -45,6 +45,7 @@ import { PageHeader } from '../components/AppShell';
 import { PermissionPicker, groupPermissions } from '../components/PermissionPicker';
 import { useAuth } from '../auth/AuthContext';
 import { palette } from '../theme';
+import { TermBankPanel } from '../components/TermBankPanel';
 import { PublishTab } from './team/PublishTab';
 import { TeamProjectsTab } from './team/ProjectsTab';
 
@@ -171,6 +172,21 @@ export default function TeamDetailPage() {
             label: '发布',
             children: <PublishTab teamId={teamId} />,
           },
+          ...(can('term_bank.access')
+            ? [
+                {
+                  key: 'terms',
+                  label: '术语库',
+                  children: (
+                    <TermBankPanel
+                      teamId={teamId}
+                      canCreate={can('term_bank.create')}
+                      canEdit={can('term_bank.edit') || can('term.create')}
+                    />
+                  ),
+                },
+              ]
+            : []),
           {
             key: 'roles',
             label: '角色',

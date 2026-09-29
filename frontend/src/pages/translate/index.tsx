@@ -34,6 +34,7 @@ import {
 } from '../../api/client';
 import { palette } from '../../theme';
 import { Canvas, MARKER_FILL, type CanvasTextMode } from './Canvas';
+import { AiModal } from '../../components/AiModal';
 import { SourcePanel } from './SourcePanel';
 import { CreditsBar } from '../../components/CreditsBar';
 
@@ -533,6 +534,15 @@ export default function TranslatePage() {
               { label: '译文', value: 'translation' },
               { label: '原文', value: 'source' },
             ]}
+          />
+
+          <AiModal
+            fileId={fileId}
+            targetId={targetId}
+            targetLabel={workbench.targets.find((t) => t.id === targetId)?.label ?? ''}
+            dirty={dirty}
+            sourceCount={workbench.sources.length}
+            onDone={() => void load()}
           />
 
           <Button
