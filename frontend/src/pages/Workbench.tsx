@@ -1,20 +1,28 @@
-import { PlusOutlined, RightOutlined, TeamOutlined } from '@ant-design/icons';
+import {
+  AppstoreOutlined,
+  BarsOutlined,
+  BookOutlined,
+  CheckCircleOutlined,
+  PlusOutlined,
+  RightOutlined,
+  RocketOutlined,
+  SearchOutlined,
+  TeamOutlined,
+  TranslationOutlined,
+} from '@ant-design/icons';
 import {
   App as AntApp,
-  Button,
-  Card,
+  Checkbox,
   Col,
   Empty,
   Input,
-  List,
   Row,
-  Segmented,
+  Select,
   Space,
-  Switch,
-  Tag,
+  Tooltip,
   Typography,
 } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ApiError,
@@ -27,14 +35,12 @@ import {
   type TeamSummary,
 } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
-import { ContentTitle } from '../components/AppShell';
-import { ProjectCard } from '../components/ProjectCard';
+import { ProjectCard, primaryActionOf } from '../components/ProjectCard';
 import { ProjectFormModal } from '../components/ProjectFormModal';
-import { STAGE_TABS } from '../components/StageChips';
-import { palette } from '../theme';
+import { StageChips } from '../components/StageChips';
 import { timeAgo } from '../utils/time';
 
-/** 按时间问候 —— 设计稿里就是「早上好，小凛」，这里保持一致。 */
+/** 按时间问候 —— 对齐 Comiku 风格 */
 function greetingOf(date: Date): string {
   const hour = date.getHours();
   if (hour < 6) return '夜深了';
@@ -44,14 +50,19 @@ function greetingOf(date: Date): string {
   return '晚上好';
 }
 
-/**
- * 工作台 —— 需求里「登录后基于职务进入工作」的落点。
- *
- * 做法不是加权限墙，而是：默认列出**我所在团队的全部作品**（可切到「只看我参与的」），
- * 每张卡给出**一个下一步动作**（映射规则见 ProjectCard）。
- * 过滤与计数都交给后端 —— 前端过滤只是体验层的便利，
- * 真正的边界永远在后端：不属于我所在团队的作品，后端根本不会返回。
- */
+function padZero(num: number): string {
+  return num < 10 ? `0${num}` : String(num);
+}
+
+/** 头像背景色彩轮换 */
+const AVATAR_PALETTE = [
+  { bg: '#ede9fe', text: '#6d28d9' },
+  { bg: '#fef3c7', text: '#b45309' },
+  { bg: '#e0e7ff', text: '#4338ca' },
+  { bg: '#fce7f3', text: '#be185d' },
+  { bg: '#ccfbf1', text: '#0f766e' },
+];
+
 export default function WorkbenchPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -61,11 +72,12 @@ export default function WorkbenchPage() {
   const [cards, setCards] = useState<ProjectCardData[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [activity, setActivity] = useState<ActivityItem[]>([]);
-  /** 作品 id → 卡在我这一环的图片数。来自署名台账 + 当前状态。 */
   const [todos, setTodos] = useState<Record<string, number>>({});
   const [stage, setStage] = useState<StageKey | 'all'>('all');
   const [mine, setMine] = useState(false);
   const [keyword, setKeyword] = useState('');
+  const [sortBy, setSortBy] = useState<'updated' | 'serial'>('updated');
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
 
@@ -97,185 +109,506 @@ export default function WorkbenchPage() {
         setActivity(actRes.activity);
         setTodos(todoRes.byProject);
       })
-      .catch(() => {
-        // 侧栏加载失败不该影响主区域可用性，静默即可。
-      });
+      .catch(() => {});
   }, []);
 
   const creatableTeams = teams.filter((t) => t.myPermissions.includes('project.create'));
-  // 一个作品都没有时，chips 上全是 0 只是噪音 —— 只在真有作品时才显示计数。
-  const hasAnyProject = Object.values(counts).some((n) => n > 0);
+
+  // 排序
+  const sortedCards = useMemo(() => {
+    const list = [...cards];
+    if (sortBy === 'serial') list.sort((a, b) => b.serial - a.serial);
+    return list;
+  }, [cards, sortBy]);
+
+  // 4 个指标卡统计
+  const inProgressCount =
+    (counts.translating ?? 0) + (counts.proofreading ?? 0) + (counts.typesetting ?? 0);
+  const translatingCount = counts.translating ?? 0;
+  const proofreadingCount = counts.proofreading ?? 0;
+  const publishedCount = counts.published ?? 0;
+
+  // 上次或当前待办作品
+  const lastProject = useMemo(() => {
+    return cards.find((c) => (todos[c.id] ?? 0) > 0) ?? cards[0] ?? null;
+  }, [cards, todos]);
+
+  // 成员总人数
+  const totalMemberCount = useMemo(() => {
+    const allMembers = new Map<string, string>();
+    for (const c of cards) {
+      for (const m of c.members) allMembers.set(m.userId, m.displayName || '?');
+    }
+    return Math.max(allMembers.size, teams.reduce((s, t) => s + t.memberCount, 0));
+  }, [cards, teams]);
 
   return (
-    <>
-      <ContentTitle
-        title={`${greetingOf(new Date())}，${user?.displayName ?? ''}`}
-        description="故事的下一页，从这里开始。"
-        extra={
-          creatableTeams.length > 0 ? (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreating(true)}>
-              新建作品
-            </Button>
-          ) : null
-        }
-      />
+    <div style={{ maxWidth: 1280, margin: '0 auto', paddingBottom: 48 }}>
+      {/* ── 顶部 Hero 问候与主动作 ──────────────────────────────── */}
+      <div className="cm-hero">
+        <div className="cm-hero-kicker">
+          <span>— A LITTLE PROGRESS, EVERY DAY</span>
+        </div>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={17}>
-          <div className="nm-chips" style={{ marginBottom: 12 }}>
-            <Segmented
-              value={stage}
-              onChange={(next) => setStage(next as StageKey | 'all')}
-              options={STAGE_TABS.map((tab) => ({
-                value: tab.key,
-                label:
-                  tab.key === 'all' || !counts[tab.key]
-                    ? tab.label
-                    : `${tab.label} ${counts[tab.key]}`,
-              }))}
-            />
+        <div className="cm-hero-title-row">
+          <h1 className="cm-hero-title">
+            {greetingOf(new Date())}，{user?.displayName ?? '伙伴'}{' '}
+            <span className="cm-hero-sparkle">✳</span>
+            <span className="cm-hero-dot">.</span>
+          </h1>
+
+          {creatableTeams.length > 0 && (
+            <button
+              type="button"
+              className="cm-hero-create-btn"
+              onClick={() => setCreating(true)}
+            >
+              <PlusOutlined style={{ fontSize: 13 }} />
+              <span>新建作品</span>
+            </button>
+          )}
+        </div>
+
+        <p className="cm-hero-subtitle">故事的下一页，从这里开始。今天也一起加油吧。</p>
+
+        {/* ── 4 个快捷指标卡 ──────────────────────────────────── */}
+        <div className="cm-metrics-grid">
+          <div className="cm-metric-card" onClick={() => setStage('all')}>
+            <div className="cm-metric-head">
+              <span className="cm-metric-label">进行中的作品</span>
+              <div
+                className="cm-metric-icon-box"
+                style={{ background: '#f5f3ff', color: '#6c5ce7' }}
+              >
+                <BookOutlined />
+              </div>
+            </div>
+            <div className="cm-metric-num-row">
+              <span className="cm-metric-num">{padZero(inProgressCount)}</span>
+              <span className="cm-metric-arrow">↗</span>
+            </div>
+            <p className="cm-metric-sub">• 每个故事都在向前</p>
           </div>
 
-          <Space style={{ marginBottom: 14 }} size={12} wrap>
-            <Input.Search
-              allowClear
-              placeholder="搜索作品名或原作者"
-              style={{ width: 240 }}
-              onSearch={(value) => setKeyword(value)}
-            />
-            <Space size={6}>
-              <Switch size="small" checked={mine} onChange={setMine} />
-              <Typography.Text style={{ fontSize: 13 }}>只看我参与的</Typography.Text>
-            </Space>
-          </Space>
+          <div className="cm-metric-card" onClick={() => setStage('translating')}>
+            <div className="cm-metric-head">
+              <span className="cm-metric-label">等待翻译</span>
+              <div
+                className="cm-metric-icon-box"
+                style={{ background: '#ecfdf5', color: '#059669' }}
+              >
+                <TranslationOutlined />
+              </div>
+            </div>
+            <div className="cm-metric-num-row">
+              <span className="cm-metric-num">{padZero(translatingCount)}</span>
+              <span className="cm-metric-arrow">↗</span>
+            </div>
+            <p className="cm-metric-sub">• 用文字传递心意</p>
+          </div>
 
+          <div className="cm-metric-card" onClick={() => setStage('proofreading')}>
+            <div className="cm-metric-head">
+              <span className="cm-metric-label">等待校对</span>
+              <div
+                className="cm-metric-icon-box"
+                style={{ background: '#fffbeb', color: '#d97706' }}
+              >
+                <CheckCircleOutlined />
+              </div>
+            </div>
+            <div className="cm-metric-num-row">
+              <span className="cm-metric-num">{padZero(proofreadingCount)}</span>
+              <span className="cm-metric-arrow">↗</span>
+            </div>
+            <p className="cm-metric-sub">• 好作品值得再读一遍</p>
+          </div>
+
+          <div className="cm-metric-card" onClick={() => setStage('published')}>
+            <div className="cm-metric-head">
+              <span className="cm-metric-label">已发布作品</span>
+              <div
+                className="cm-metric-icon-box"
+                style={{ background: '#fdf2f8', color: '#db2777' }}
+              >
+                <RocketOutlined />
+              </div>
+            </div>
+            <div className="cm-metric-num-row">
+              <span className="cm-metric-num">{padZero(publishedCount)}</span>
+              <span className="cm-metric-arrow">↗</span>
+            </div>
+            <p className="cm-metric-sub">• 又有故事被更多人看见</p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── 主体双栏区域 ────────────────────────────────────────── */}
+      <Row gutter={[24, 24]}>
+        <Col xs={24} lg={17}>
+          {/* 作品区标题 */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              gap: 8,
+              marginBottom: 10,
+            }}
+          >
+            <h2
+              style={{
+                fontSize: 18,
+                fontWeight: 800,
+                color: 'var(--nm-ink)',
+                margin: 0,
+              }}
+            >
+              最近的作品
+            </h2>
+            <span style={{ fontSize: 13, color: 'var(--nm-ink-soft)' }}>
+              {cards.length} 部作品
+            </span>
+          </div>
+
+          {/* Comiku 状态滑动选项卡 */}
+          <StageChips value={stage} onChange={setStage} counts={counts} />
+
+          {/* 搜索与过滤控制栏 */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12,
+              flexWrap: 'wrap',
+              marginBottom: 20,
+            }}
+          >
+            <Input
+              allowClear
+              prefix={<SearchOutlined style={{ color: 'var(--nm-ink-soft)' }} />}
+              placeholder="搜索作品、作者或编号..."
+              style={{
+                width: 280,
+                borderRadius: 999,
+                background: 'var(--nm-surface)',
+              }}
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+            />
+
+            <Space size={16} wrap>
+              <Checkbox checked={mine} onChange={(e) => setMine(e.target.checked)}>
+                <span style={{ fontSize: 13, color: 'var(--nm-ink)' }}>只看我参与的</span>
+              </Checkbox>
+
+              <Select
+                size="small"
+                value={sortBy}
+                onChange={setSortBy}
+                style={{ width: 110 }}
+                options={[
+                  { value: 'updated', label: '最新更新' },
+                  { value: 'serial', label: '作品编号' },
+                ]}
+              />
+
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  background: 'var(--nm-surface)',
+                  border: '1px solid var(--nm-border)',
+                  borderRadius: 8,
+                  padding: 2,
+                }}
+              >
+                <button
+                  type="button"
+                  style={{
+                    background: viewMode === 'grid' ? '#f0eefb' : 'transparent',
+                    color: viewMode === 'grid' ? 'var(--nm-primary)' : 'var(--nm-ink-soft)',
+                    border: 'none',
+                    borderRadius: 6,
+                    padding: '4px 8px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                  }}
+                  onClick={() => setViewMode('grid')}
+                  title="卡片视图"
+                >
+                  <AppstoreOutlined style={{ fontSize: 14 }} />
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    background: viewMode === 'list' ? '#f0eefb' : 'transparent',
+                    color: viewMode === 'list' ? 'var(--nm-primary)' : 'var(--nm-ink-soft)',
+                    border: 'none',
+                    borderRadius: 6,
+                    padding: '4px 8px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                  }}
+                  onClick={() => setViewMode('list')}
+                  title="列表视图"
+                >
+                  <BarsOutlined style={{ fontSize: 14 }} />
+                </button>
+              </div>
+            </Space>
+          </div>
+
+          {/* 作品卡片网格 */}
           {loading ? (
-            <Card loading />
-          ) : cards.length === 0 ? (
-            <Card>
+            <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--nm-ink-soft)' }}>
+              加载中…
+            </div>
+          ) : sortedCards.length === 0 ? (
+            <div
+              style={{
+                background: 'var(--nm-surface)',
+                border: '1px solid var(--nm-border)',
+                borderRadius: 16,
+                padding: '60px 20px',
+              }}
+            >
               <Empty
                 image={Empty.PRESENTED_IMAGE_SIMPLE}
                 description={
                   <Space direction="vertical" size={4}>
-                    <Typography.Text>
-                      {hasAnyProject ? '没有符合条件的作品' : '还没有作品'}
+                    <Typography.Text strong style={{ fontSize: 15 }}>
+                      没有找到符合条件的作品
                     </Typography.Text>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      {hasAnyProject
-                        ? '换个档位，或清掉搜索条件再看看。'
-                        : creatableTeams.length > 0
-                          ? '建一个作品，把图片传上来就可以开工了。'
-                          : '你所在的团队还没有作品；等人拉你进作品，或找管理员开一个。'}
+                    <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                      换个状态标签、或者清掉搜索框关键词再试一次。
                     </Typography.Text>
                   </Space>
                 }
               />
-            </Card>
+            </div>
           ) : (
-            <Row gutter={[14, 14]}>
-              {cards.map((card) => (
-                <Col xs={24} md={12} key={card.id}>
+            <Row gutter={[18, 18]}>
+              {sortedCards.map((card) => (
+                <Col xs={24} sm={12} key={card.id}>
                   <ProjectCard card={card} todoCount={todos[card.id] ?? 0} />
                 </Col>
               ))}
             </Row>
           )}
+
+          {/* 底部小脚注文案 */}
+          <div
+            style={{
+              textAlign: 'center',
+              marginTop: 40,
+              paddingTop: 24,
+              borderTop: '1px solid var(--nm-border)',
+              color: 'var(--nm-ink-soft)',
+              fontSize: 12,
+            }}
+          >
+            <span>每一个故事，都在慢慢完成 · </span>
+            <span style={{ color: 'var(--nm-primary)' }}>今天，继续一点点 ✦</span>
+          </div>
         </Col>
 
+        {/* ── 右侧故事进度与动态栏 ──────────────────────────────── */}
         <Col xs={24} lg={7}>
-          <Card
-            title="我的团队"
-            size="small"
-            extra={
-              <Button type="link" size="small" onClick={() => navigate('/teams')}>
-                全部
-              </Button>
-            }
-          >
-            {teams.length === 0 ? (
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                  还没有加入任何团队。
-                </Typography.Text>
-                <Button size="small" icon={<PlusOutlined />} onClick={() => navigate('/teams')}>
-                  创建或加入
-                </Button>
-              </Space>
-            ) : (
-              <List
-                size="small"
-                dataSource={teams}
-                renderItem={(team) => (
-                  <List.Item
-                    style={{ cursor: 'pointer', padding: '8px 0' }}
-                    onClick={() => navigate(`/teams/${team.id}`)}
-                  >
-                    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                      <Space size={8}>
-                        <TeamOutlined style={{ color: palette.primary }} />
-                        <Space direction="vertical" size={0}>
-                          <Typography.Text>{team.name}</Typography.Text>
-                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                            {team.memberCount} 位成员
-                          </Typography.Text>
-                        </Space>
-                      </Space>
-                      <Space size={4}>
-                        <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
-                          {team.myRole.name}
-                        </Tag>
-                        <RightOutlined style={{ fontSize: 10, color: palette.inkSoft }} />
-                      </Space>
-                    </Space>
-                  </List.Item>
-                )}
-              />
-            )}
-          </Card>
+          {/* 卡片 1：你的故事进度 */}
+          {lastProject && (
+            <div className="cm-sidebar-card">
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  color: 'var(--nm-primary)',
+                  letterSpacing: 0.5,
+                  marginBottom: 6,
+                }}
+              >
+                <span>✦</span>
+                <span>你的故事进度</span>
+              </div>
+              <p style={{ fontSize: 13, color: 'var(--nm-ink)', margin: '0 0 12px 0', lineHeight: 1.5 }}>
+                还有 <strong style={{ color: 'var(--nm-primary)' }}>{cards.length}</strong>{' '}
+                部作品，等你接着写下去。
+              </p>
+              <button
+                type="button"
+                className="cm-card-action-btn"
+                style={{ fontSize: 13 }}
+                onClick={() => {
+                  const act = primaryActionOf(lastProject);
+                  navigate(act.to);
+                }}
+              >
+                <span>回到上次的作品</span>
+                <RightOutlined style={{ fontSize: 10 }} />
+              </button>
+            </div>
+          )}
 
-          <Card title="团队动态" size="small" style={{ marginTop: 16 }}>
+          {/* 卡片 2：团队动态 */}
+          <div className="cm-sidebar-card">
+            <div className="cm-sidebar-card-title">
+              <span>团队动态</span>
+              <button
+                type="button"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: 12,
+                  color: 'var(--nm-primary)',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+                onClick={() => navigate('/teams')}
+              >
+                查看全部 →
+              </button>
+            </div>
+
             {activity.length === 0 ? (
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+              <p style={{ fontSize: 13, color: 'var(--nm-ink-soft)', margin: 0 }}>
                 谁把哪部作品推进到了哪一步，会出现在这里。
-              </Typography.Text>
+              </p>
             ) : (
-              <List
-                size="small"
-                dataSource={activity.slice(0, 12)}
-                renderItem={(item) => (
-                  <List.Item
-                    style={{
-                      padding: '8px 0',
-                      cursor: item.targetType === 'project' ? 'pointer' : 'default',
-                    }}
-                    onClick={() => {
-                      if (item.targetType === 'project') navigate(`/projects/${item.targetId}`);
-                    }}
-                  >
-                    <Space direction="vertical" size={0} style={{ width: '100%' }}>
-                      <Typography.Text style={{ fontSize: 13 }}>
-                        <Typography.Text strong>{item.actor?.displayName ?? '系统'}</Typography.Text>{' '}
-                        {item.text}
-                      </Typography.Text>
-                      <Space size={6}>
-                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                          {timeAgo(item.createdAt)}
-                        </Typography.Text>
-                        {item.teamName ? (
-                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                            · {item.teamName}
-                          </Typography.Text>
-                        ) : null}
-                      </Space>
-                    </Space>
-                  </List.Item>
-                )}
-              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {activity.slice(0, 5).map((item, idx) => {
+                  const color = AVATAR_PALETTE[idx % AVATAR_PALETTE.length]!;
+                  const initial = (item.actor?.displayName ?? '系统').slice(0, 1);
+                  return (
+                    <div
+                      key={item.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 10,
+                        fontSize: 13,
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: 24,
+                          height: 24,
+                          borderRadius: '50%',
+                          background: color.bg,
+                          color: color.text,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          flex: 'none',
+                          marginTop: 2,
+                        }}
+                      >
+                        {initial}
+                      </div>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ color: 'var(--nm-ink)' }}>
+                          <strong>{item.actor?.displayName ?? '系统'}</strong>{' '}
+                          <span style={{ color: 'var(--nm-ink-soft)' }}>{item.text}</span>
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: '#9ba1b0',
+                            marginTop: 2,
+                            display: 'flex',
+                            gap: 4,
+                          }}
+                        >
+                          <span>{timeAgo(item.createdAt)}</span>
+                          {item.teamName && <span>· {item.teamName}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
-          </Card>
+          </div>
+
+          {/* 卡片 3：一起创作的人 */}
+          <div className="cm-sidebar-card">
+            <div className="cm-sidebar-card-title">
+              <span>一起创作的人</span>
+              <TeamOutlined style={{ color: 'var(--nm-ink-soft)', fontSize: 14 }} />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+              {/* 头像堆叠 */}
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                {teams.slice(0, 5).map((team, idx) => {
+                  const color = AVATAR_PALETTE[idx % AVATAR_PALETTE.length]!;
+                  const initial = team.name.slice(0, 1);
+                  return (
+                    <Tooltip key={team.id} title={`${team.name}（${team.memberCount} 人）`}>
+                      <div
+                        style={{
+                          width: 28,
+                          height: 28,
+                          borderRadius: '50%',
+                          background: color.bg,
+                          color: color.text,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 12,
+                          fontWeight: 700,
+                          border: '2px solid var(--nm-surface)',
+                          marginLeft: idx === 0 ? 0 : -8,
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => navigate(`/teams/${team.id}`)}
+                      >
+                        {initial}
+                      </div>
+                    </Tooltip>
+                  );
+                })}
+              </div>
+              <span style={{ fontSize: 12, color: 'var(--nm-ink-soft)', marginLeft: 4 }}>
+                {totalMemberCount} 位伙伴
+              </span>
+            </div>
+
+            <button
+              type="button"
+              className="cm-card-action-btn"
+              style={{ fontSize: 12 }}
+              onClick={() => navigate('/teams')}
+            >
+              <span>查看团队成员</span>
+              <RightOutlined style={{ fontSize: 9 }} />
+            </button>
+          </div>
+
+          {/* 卡片 4：金句名片卡 */}
+          <div className="cm-quote-card">
+            <div className="cm-quote-mark">“</div>
+            <div className="cm-quote-line">因为喜欢，</div>
+            <div className="cm-quote-line" style={{ fontWeight: 600, color: 'var(--nm-ink)' }}>
+              所以想让更多人读到。
+            </div>
+            <div className="cm-quote-kicker">
+              <span>MADE WITH LOVE, TOGETHER.</span>
+              <span>✦</span>
+            </div>
+          </div>
         </Col>
       </Row>
 
+      {/* 新建作品弹窗 */}
       {creating && creatableTeams[0] ? (
         <ProjectFormModal
           open
@@ -294,6 +627,6 @@ export default function WorkbenchPage() {
           }}
         />
       ) : null}
-    </>
+    </div>
   );
 }

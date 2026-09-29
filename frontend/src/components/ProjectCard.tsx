@@ -1,31 +1,27 @@
-import { PictureOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
-import { Avatar, Button, Card, Progress, Space, Tag, Tooltip, Typography } from 'antd';
+import { PictureOutlined, RightOutlined } from '@ant-design/icons';
+import { Tooltip } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { fileApi, type ProjectCard as ProjectCardData } from '../api/client';
-import { palette, stageColors } from '../theme';
+import { stageColors } from '../theme';
 
 /**
- * 作品卡 —— 工作台的主视觉单元。
+ * 作品卡 —— Comiku 风格。
  *
- * 设计上刻意遵守一条规则：**每张卡只有一个主操作**，且这个主操作由
- * 「我的角色」决定，而不是把能做的操作都堆上去。工作台上十张卡各带五个按钮，
- * 结果就是每个都要读一遍才知道点哪个 —— 那还不如列表。
- *
- * 主操作的**去向**直接落到那张图的工作页（`/workbench/<第一张图>`），
- * 而不是先到作品页再让用户点一次。卡片是「今天该干什么」的入口，
- * 多一跳就少一分「一眼看出该动哪个」的价值。
+ * 视觉规范对齐 https://comiku-preview.vercel.app：
+ *  - 顶部横幅大封面 + 页面角标（`8 P`）；
+ *  - 编号（`CM-128`）+ 圆角状态药丸（`• 翻译中`）；
+ *  - 单一主力环节进度条；
+ *  - 底部左侧头像堆叠（首字彩底圆圈），右侧单一动作高亮链接（`继续翻译 →`）。
  */
 
 export function primaryActionOf(card: ProjectCardData): { label: string; to: string; kind: string } {
   const code = card.myRole?.systemCode;
   const project = `/projects/${card.id}`;
-  // 没有图片时无处可去（也谈不上翻校），落到作品页去上传。
   const workbench = card.firstFileId ? `${project}/workbench/${card.firstFileId}` : project;
 
   if (card.progress.fileCount === 0) return { label: '上传图片', to: project, kind: 'upload' };
   if (code === 'translator') return { label: '继续翻译', to: workbench, kind: 'translate' };
   if (code === 'proofreader') return { label: '开始校对', to: workbench, kind: 'proofread' };
-  // 嵌字的工作页在 M5，现在先落到作品页（那里有图片与导出入口）。
   if (code === 'typesetter') return { label: '上传成品', to: project, kind: 'typeset' };
   if (code === 'creator' || code === 'admin' || code === 'supervisor') {
     return { label: '管理作品', to: project, kind: 'manage' };
@@ -33,174 +29,213 @@ export function primaryActionOf(card: ProjectCardData): { label: string; to: str
   return { label: '查看作品', to: project, kind: 'view' };
 }
 
-const STAGE_LABEL: Record<string, string> = {
-  translating: '翻译中',
-  proofreading: '校对中',
-  typesetting: '嵌字中',
-  publishable: '待发布',
-  published: '已发布',
+const STAGE_META: Record<string, { label: string; dot: string; bg: string; text: string; progressLabel: string }> = {
+  translating: {
+    label: '翻译中',
+    dot: '#10b981',
+    bg: '#ecfdf5',
+    text: '#059669',
+    progressLabel: '译文进度',
+  },
+  proofreading: {
+    label: '校对中',
+    dot: '#f59e0b',
+    bg: '#fffbeb',
+    text: '#d97706',
+    progressLabel: '校对进度',
+  },
+  typesetting: {
+    label: '嵌字中',
+    dot: '#8b5cf6',
+    bg: '#f5f3ff',
+    text: '#7c3aed',
+    progressLabel: '页面进度',
+  },
+  publishable: {
+    label: '待发布',
+    dot: '#3b82f6',
+    bg: '#eff6ff',
+    text: '#2563eb',
+    progressLabel: '页面进度',
+  },
+  published: {
+    label: '已发布',
+    dot: '#059669',
+    bg: '#f0fdf4',
+    text: '#059669',
+    progressLabel: '发布进度',
+  },
 };
 
-function percentage(done: number, total: number): number {
-  if (total <= 0) return 0;
-  return Math.round((done / total) * 100);
-}
-
-/** 进度条：三条细线，分别对应「译」「校」「页」。 */
-function ProgressLine({ label, done, total }: { label: string; done: number; total: number }) {
-  const percent = percentage(done, total);
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <Typography.Text type="secondary" style={{ fontSize: 11, width: 26, flex: 'none' }}>
-        {label}
-      </Typography.Text>
-      <Progress
-        percent={percent}
-        showInfo={false}
-        size="small"
-        strokeColor={percent >= 100 ? palette.success : palette.primary}
-        style={{ flex: 1, margin: 0 }}
-      />
-      <Typography.Text type="secondary" style={{ fontSize: 11, width: 44, textAlign: 'right', flex: 'none' }}>
-        {done}/{total}
-      </Typography.Text>
-    </div>
-  );
-}
+/** 头像背景色彩轮换：浅紫 / 暖黄 / 淡蓝 / 浅粉 / 薄荷绿 */
+const AVATAR_PALETTE = [
+  { bg: '#ede9fe', text: '#6d28d9' },
+  { bg: '#fef3c7', text: '#b45309' },
+  { bg: '#e0e7ff', text: '#4338ca' },
+  { bg: '#fce7f3', text: '#be185d' },
+  { bg: '#ccfbf1', text: '#0f766e' },
+];
 
 export function ProjectCard({ card, todoCount = 0 }: { card: ProjectCardData; todoCount?: number }) {
   const navigate = useNavigate();
   const action = primaryActionOf(card);
   const total = card.progress.fileCount;
+  const meta = STAGE_META[card.stage] ?? STAGE_META.translating!;
+
+  // 依据当前环节挑出最有信息量的那条进度值
+  let done = card.progress.translatedCount;
+  if (card.stage === 'proofreading') done = card.progress.proofreadCount;
+  else if (card.stage === 'typesetting' || card.stage === 'publishable') done = card.progress.typesetCount;
+  else if (card.stage === 'published') done = card.progress.publishedCount;
+
+  const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  const coverUrl = card.coverFileId ? fileApi.mediaUrl(card.coverFileId, 'thumb') : null;
 
   return (
-    <Card
-      hoverable
-      className="nm-project-card"
-      onClick={() => navigate(`/projects/${card.id}`)}
-      styles={{ body: { padding: 16 } }}
-      style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
-    >
-      <div style={{ display: 'flex', gap: 14 }}>
-        {/* 封面：用缩略图而不是原图。列表页十几张卡，原图会把带宽吃光。 */}
-        <div
-          style={{
-            width: 76,
-            height: 100,
-            flex: 'none',
-            borderRadius: 6,
-            overflow: 'hidden',
-            background: 'var(--nm-border)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          {card.coverFileId ? (
-            <img
-              src={fileApi.mediaUrl(card.coverFileId, 'thumb')}
-              alt=""
-              loading="lazy"
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-            />
-          ) : (
-            <PictureOutlined style={{ fontSize: 22, color: palette.inkSoft }} />
-          )}
+    <div className="cm-project-card" onClick={() => navigate(`/projects/${card.id}`)}>
+      {/* 顶部大横幅封面 */}
+      <div className="cm-card-cover-wrap">
+        {coverUrl ? (
+          <img src={coverUrl} alt="" className="cm-card-cover-img" loading="lazy" />
+        ) : (
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'rgba(108, 92, 231, 0.45)',
+            }}
+          >
+            <PictureOutlined style={{ fontSize: 32 }} />
+          </div>
+        )}
+
+        <div className="cm-card-page-badge">
+          <PictureOutlined style={{ fontSize: 10 }} />
+          <span>{total > 0 ? `${total} P` : '0 P'}</span>
         </div>
 
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <Space size={6} style={{ marginBottom: 4 }} wrap>
-            <Tag style={{ marginInlineEnd: 0, fontSize: 11 }}>#{card.serial}</Tag>
-            {/* 待办角标：这张作品里有多少张图正卡在「该我接」的那一步。
-                有它才能一眼看出「今天该动哪部作品」。 */}
-            {todoCount > 0 ? (
+        <div className="cm-card-watermark">
+          {card.author ? `${card.author.toUpperCase()} · STORY` : 'COMIC STORIES ・ 夏の記録'}
+        </div>
+      </div>
+
+      {/* 卡片主体 */}
+      <div className="cm-card-body">
+        <div className="cm-card-header-row">
+          <span className="cm-card-code">CM-{card.serial}</span>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {todoCount > 0 && (
               <Tooltip title={`有 ${todoCount} 张图正等着你处理`}>
-                <Tag color={palette.warning} style={{ marginInlineEnd: 0, fontSize: 11 }}>
+                <span
+                  className="cm-status-pill"
+                  style={{ background: '#fef3c7', color: '#b45309', border: '1px solid rgba(180,83,9,0.15)' }}
+                >
                   待办 {todoCount}
-                </Tag>
+                </span>
               </Tooltip>
-            ) : null}
-            <Tag color={stageColors[card.stage]} style={{ marginInlineEnd: 0, fontSize: 11 }}>
-              {STAGE_LABEL[card.stage] ?? card.stage}
-            </Tag>
-            {card.status === 'archived' ? <Tag style={{ marginInlineEnd: 0, fontSize: 11 }}>已归档</Tag> : null}
-          </Space>
-
-          <Typography.Text strong ellipsis style={{ display: 'block', fontSize: 14 }}>
-            {card.name}
-          </Typography.Text>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }} ellipsis>
-            {card.author ? `原作 ${card.author}` : card.teamName}
-          </Typography.Text>
-
-          <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <ProgressLine label="译" done={card.progress.translatedCount} total={total} />
-            <ProgressLine label="校" done={card.progress.proofreadCount} total={total} />
-            <ProgressLine label="页" done={card.progress.typesetCount} total={total} />
+            )}
+            <span
+              className="cm-status-pill"
+              style={{
+                background: meta.bg,
+                color: meta.text,
+                border: `1px solid ${meta.text}22`,
+              }}
+            >
+              <span className="cm-status-dot" style={{ background: meta.dot }} />
+              {meta.label}
+            </span>
           </div>
         </div>
+
+        <div className="cm-card-title" title={card.name}>
+          {card.name}
+        </div>
+
+        <div className="cm-card-meta">
+          {card.author ? `${card.author} · ` : ''}
+          {card.teamName || '原创短篇'}
+        </div>
+
+        {/* 进度条 */}
+        <div className="cm-card-progress-wrap">
+          <div className="cm-card-progress-label">
+            <span>{meta.progressLabel}</span>
+            <span className="cm-card-progress-num">
+              {done} <span style={{ color: 'var(--nm-ink-soft)', fontWeight: 400 }}>/</span> {total}
+            </span>
+          </div>
+          <div className="cm-card-progress-track">
+            <div
+              className="cm-card-progress-fill"
+              style={{
+                width: `${percent}%`,
+                background: percent >= 100 ? '#10b981' : stageColors[card.stage] || '#6c5ce7',
+              }}
+            />
+          </div>
+        </div>
+
+        {/* 底部：成员头像堆叠与主操作 */}
+        <div className="cm-card-footer">
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            {card.members.length > 0 ? (
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                {card.members.slice(0, 4).map((m, idx) => {
+                  const color = AVATAR_PALETTE[idx % AVATAR_PALETTE.length]!;
+                  const initial = (m.displayName || '?').trim().slice(0, 1);
+                  return (
+                    <Tooltip key={m.userId} title={`${m.displayName} · ${m.roleName}`}>
+                      <div
+                        style={{
+                          width: 26,
+                          height: 26,
+                          borderRadius: '50%',
+                          background: color.bg,
+                          color: color.text,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontSize: 12,
+                          fontWeight: 700,
+                          border: '2px solid var(--nm-surface)',
+                          marginLeft: idx === 0 ? 0 : -8,
+                          boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                          cursor: 'default',
+                        }}
+                      >
+                        {initial}
+                      </div>
+                    </Tooltip>
+                  );
+                })}
+                {card.members.length > 4 && (
+                  <span style={{ fontSize: 11, color: 'var(--nm-ink-soft)', marginLeft: 4 }}>
+                    +{card.members.length - 4}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <span style={{ fontSize: 12, color: 'var(--nm-ink-soft)' }}>未分派成员</span>
+            )}
+          </div>
+
+          <button
+            type="button"
+            className="cm-card-action-btn"
+            onClick={(event) => {
+              event.stopPropagation();
+              navigate(action.to);
+            }}
+          >
+            <span>{action.label}</span>
+            <RightOutlined style={{ fontSize: 10 }} />
+          </button>
+        </div>
       </div>
-
-      <div
-        style={{
-          marginTop: 14,
-          paddingTop: 12,
-          borderTop: `1px solid var(--nm-border)`,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-        }}
-      >
-        <Space size={4} style={{ minWidth: 0 }}>
-          {card.members.length > 0 ? (
-            <Avatar.Group
-              max={{ count: 3 }}
-              size={24}
-              // 头像堆叠的 tooltip 用角色名，比只显示昵称更有信息量 ——
-              // 「谁在翻译」比「有哪几个人」更能说明这部作品的处境。
-            >
-              {card.members.map((m) => (
-                <Tooltip key={m.userId} title={`${m.displayName} · ${m.roleName}`}>
-                  <Avatar
-                    size={24}
-                    style={{ background: palette.primary, fontSize: 11 }}
-                    src={m.avatarKey ?? undefined}
-                  >
-                    {m.displayName.slice(0, 1)}
-                  </Avatar>
-                </Tooltip>
-              ))}
-            </Avatar.Group>
-          ) : (
-            <Space size={4}>
-              <UserOutlined style={{ fontSize: 11, color: palette.inkSoft }} />
-              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                {total > 0 ? `${total} 页` : '还没有图片'}
-              </Typography.Text>
-            </Space>
-          )}
-
-          {card.members.length > 0 ? (
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              <TeamOutlined style={{ marginRight: 3 }} />
-              {total} 页
-            </Typography.Text>
-          ) : null}
-        </Space>
-
-        <Button
-          type="primary"
-          size="small"
-          onClick={(event) => {
-            // 卡片整块可点，但主操作不该顺手把人带到别处 —— 拦一下冒泡。
-            event.stopPropagation();
-            navigate(action.to);
-          }}
-        >
-          {action.label}
-        </Button>
-      </div>
-    </Card>
+    </div>
   );
 }

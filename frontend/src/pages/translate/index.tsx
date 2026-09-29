@@ -33,7 +33,7 @@ import {
   type SourceWithTranslations,
 } from '../../api/client';
 import { palette } from '../../theme';
-import { Canvas, MARKER_FILL, type CanvasTextMode } from './Canvas';
+import { Canvas, type CanvasTextMode } from './Canvas';
 import { AiModal } from '../../components/AiModal';
 import { SourcePanel } from './SourcePanel';
 import { CreditsBar } from '../../components/CreditsBar';
@@ -427,11 +427,12 @@ export default function TranslatePage() {
   return (
     <div className="nm-translate">
       <div className="nm-translate-bar">
-        <Space size={8} wrap>
+        <Space size={10} wrap align="center">
           <Button
             type="text"
             size="small"
             icon={<ArrowLeftOutlined />}
+            style={{ borderRadius: 8, fontWeight: 600, color: 'var(--nm-ink)' }}
             onClick={() => {
               if (dirtyRef.current) {
                 modal.confirm({
@@ -452,41 +453,88 @@ export default function TranslatePage() {
             作品
           </Button>
 
-          <Space size={2}>
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 2,
+              background: '#f3f4f6',
+              padding: '2px 6px',
+              borderRadius: 8,
+            }}
+          >
             <Button
               size="small"
               type="text"
-              icon={<LeftOutlined />}
+              icon={<LeftOutlined style={{ fontSize: 10 }} />}
               disabled={!prevFile}
               onClick={() => void go(prevFile?.id)}
+              style={{ width: 22, height: 22, padding: 0 }}
             />
-            <Typography.Text style={{ fontSize: 13 }}>
-              {index >= 0 ? index + 1 : '?'} / {files.length || '?'}
-            </Typography.Text>
+            <span style={{ fontSize: 12, fontWeight: 700, padding: '0 4px', color: 'var(--nm-ink)' }}>
+              {index >= 0 ? String(index + 1).padStart(2, '0') : '--'} / {String(files.length || 0).padStart(2, '0')} P
+            </span>
             <Button
               size="small"
               type="text"
-              icon={<RightOutlined />}
+              icon={<RightOutlined style={{ fontSize: 10 }} />}
               disabled={!nextFile}
               onClick={() => void go(nextFile?.id)}
+              style={{ width: 22, height: 22, padding: 0 }}
             />
-          </Space>
+          </div>
 
           <Tooltip title={file.name}>
-            <Typography.Text strong style={{ fontSize: 13, maxWidth: 180 }} ellipsis>
+            <span
+              style={{
+                fontSize: 13,
+                fontWeight: 700,
+                color: 'var(--nm-ink)',
+                maxWidth: 160,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
               {file.name}
-            </Typography.Text>
+            </span>
           </Tooltip>
 
-          <Tag color={palette.primary} style={{ marginInlineEnd: 0 }}>
-            {scoreLabel(file.state)}
-          </Tag>
+          {(() => {
+            const sm = STAGE_STYLES[file.state] ?? STAGE_STYLES.translating!;
+            return (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  borderRadius: 999,
+                  background: sm.bg,
+                  color: sm.text,
+                }}
+              >
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: sm.dot }} />
+                {scoreLabel(file.state)}
+              </span>
+            );
+          })()}
 
           {translated ? (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              译 {translated.translated}/{completeness.sourceCount} · 校 {translated.proofread}/
-              {completeness.sourceCount}
-            </Typography.Text>
+            <span
+              style={{
+                fontSize: 12,
+                color: 'var(--nm-ink-soft)',
+                background: '#f8fafc',
+                padding: '2px 8px',
+                borderRadius: 6,
+                border: '1px solid #e2e8f0',
+              }}
+            >
+              译 {translated.translated}/{completeness.sourceCount} · 校 {translated.proofread}/{completeness.sourceCount}
+            </span>
           ) : null}
         </Space>
 
@@ -589,22 +637,6 @@ export default function TranslatePage() {
 
       <div className="nm-translate-body">
         <div className="nm-translate-canvas">
-          {/* 没有「工具」这个概念了 —— 新建标号全靠鼠标键位，所以键位说明
-              必须常驻在画布上方。左键/右键的区别是记不住的，得看得见。 */}
-          <Space size={12} style={{ marginBottom: 8 }} wrap>
-            <span className="nm-marker-legend">
-              <i style={{ background: MARKER_FILL.in }} />
-              左键点画面 = 框内
-            </span>
-            <span className="nm-marker-legend">
-              <i style={{ background: MARKER_FILL.out }} />
-              右键点画面 = 框外
-            </span>
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              拖动标记可移动 · Ctrl+滚轮缩放 · ←/→ 翻页 · Delete 删除选中 · Esc 取消选中
-            </Typography.Text>
-          </Space>
-
           <Canvas
             imageUrl={fileApi.mediaUrl(file.id, 'preview')}
             imageWidth={file.width || 1}
@@ -616,6 +648,10 @@ export default function TranslatePage() {
             onCreate={canEdit ? createSource : () => undefined}
             onGeometryChange={canEdit ? changeGeometry : () => undefined}
             showHint={canEdit}
+            pageIndex={index >= 0 ? index + 1 : undefined}
+            pageCount={files.length}
+            onPrevPage={() => void go(prevFile?.id)}
+            onNextPage={() => void go(nextFile?.id)}
           />
         </div>
 
@@ -714,5 +750,17 @@ function nextActionOf(
       return null;
   }
 }
+
+const STAGE_STYLES: Record<string, { bg: string; text: string; dot: string }> = {
+  sourced: { bg: '#f3f4f6', text: '#6b7280', dot: '#9ca3af' },
+  translating: { bg: '#ecfdf5', text: '#059669', dot: '#10b981' },
+  translated: { bg: '#f0fdf4', text: '#15803d', dot: '#22c55e' },
+  proofreading: { bg: '#fffbeb', text: '#d97706', dot: '#f59e0b' },
+  proofread: { bg: '#f5f3ff', text: '#7c3aed', dot: '#8b5cf6' },
+  typesetting: { bg: '#eff6ff', text: '#2563eb', dot: '#3b82f6' },
+  typeset: { bg: '#f5f3ff', text: '#7c3aed', dot: '#8b5cf6' },
+  publishable: { bg: '#eff6ff', text: '#1d4ed8', dot: '#3b82f6' },
+  published: { bg: '#f0fdf4', text: '#059669', dot: '#10b981' },
+};
 
 export { scoreLabel };
