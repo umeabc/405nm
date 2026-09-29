@@ -56,11 +56,12 @@ export const PERMISSIONS: readonly PermissionDef[] = [
 
   // ── 项目域 ─────────────────────────────────────────────────
   { code: 'project.finish', scope: 'project', label: '结项', legacyCode: 1010 },
-  // 405nm 新增：moeflow 里「改作品资料」没有独立权限码，靠「是不是管理员」判断。
-  // 拆成独立码是为了让「谁能改作品名」这件事可授权、可审计，而不是绑死在等级上。
-  { code: 'project.edit', scope: 'project', label: '修改作品资料' },
-  { code: 'project.delete', scope: 'project', label: '删除作品' },
-  { code: 'project.member.manage', scope: 'project', label: '管理作品成员与角色' },
+  // 下面三个在旧站属于**共用基类**（`PermissionMixin`）的权限码，团队域与作品域用的是同一批数字。
+  // 带上 legacyCode 有两个作用：迁移时把它们认出来（否则老角色丢掉这三项），
+  // 以及**别把它们当成「本站新权限」补发给所有人** —— 否则翻译、校对这些角色会莫名其妙拿到成员管理权。
+  { code: 'project.edit', scope: 'project', label: '修改作品资料', legacyCode: 10 },
+  { code: 'project.delete', scope: 'project', label: '删除作品', legacyCode: 5 },
+  { code: 'project.member.manage', scope: 'project', label: '管理作品成员与角色', legacyCode: 105 },
   { code: 'file.add', scope: 'project', label: '上传图片', legacyCode: 1020 },
   { code: 'file.move', scope: 'project', label: '移动图片', legacyCode: 1030 },
   { code: 'file.rename', scope: 'project', label: '重命名图片', legacyCode: 1040 },

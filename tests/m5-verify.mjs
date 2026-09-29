@@ -216,6 +216,27 @@ for (const tpl of PROJECT_ROLE_TEMPLATES) {
   );
 }
 
+// ── 导出挑哪一份译文：必须是**确定**的 ────────────────────────
+//
+// 候选查询没有 ORDER BY，所以「随便找一份有校对稿的」会跟着行的物理顺序变 ——
+// 同一份数据两次导出可能挑到不同的译文。规则是：**选中的那份的校对稿优先**。
+// 这一条是迁移对账的前提（迁移按同一口径把最佳候选落成「选中」）。
+const { pickTranslation } = await import('../backend/dist/export/labelplus.js');
+const picked = pickTranslation([
+  { content: '甲的译文', proofreadContent: '甲校', isSelected: false },
+  { content: '乙的译文', proofreadContent: '乙校', isSelected: true },
+]);
+record('导出', '有多份校对稿时挑「被选中」的那份', picked === '乙校', picked);
+record(
+  '导出',
+  '只有未选中的那份有校对稿时仍然用它',
+  pickTranslation([
+    { content: '甲的译文', proofreadContent: '甲校', isSelected: false },
+    { content: '乙的译文', proofreadContent: '', isSelected: true },
+  ]) === '甲校',
+);
+record('导出', '一份都没校对时用选中那份的正文', pickTranslation([{ content: '乙的译文', proofreadContent: '', isSelected: true }]) === '乙的译文');
+
 // ⚠️ 这个接口收的是 userId + projectRoleId（不是 username + roleId）。
 // 第一次跑的时候字段名写错了，请求被校验拒掉、而我没看返回码 —— 于是
 // 「嵌字角色可以回传成品」的断言以 403 的面目失败，看起来像权限配错了。

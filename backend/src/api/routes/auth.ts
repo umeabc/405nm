@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { hashPassword, verifyPassword } from '../../auth/password.js';
+import { hashPassword, needsRehash, verifyPassword } from '../../auth/password.js';
 import {
   clearSessionCookie,
   createSession,
@@ -106,10 +106,17 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       throw tooManyRequests('登录失败次数过多，请一小时后再试');
     }
 
+    // 含 `@` 就按邮箱查：用户名规则不允许 `@`，两者不会混淆。
+    // 邮箱这条路是给 moeflow 迁来的账号的（那边用邮箱登录，见 users.email）。
+    const identifier = username.trim();
     const rows = await db
       .select()
       .from(users)
-      .where(eq(users.username, username.trim()))
+      .where(
+        identifier.includes('@')
+          ? eq(users.email, identifier.toLowerCase())
+          : eq(users.username, identifier),
+      )
       .limit(1);
     const user = rows[0];
 
@@ -121,6 +128,19 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
 
     // 登录成功就清零，免得「白天输错两次」在晚上还占着额度。
     await resetRateLimit(failKey);
+
+    // 迁移来的旧格式哈希（werkzeug）：这是唯一拿得到明文的时机，顺手换成本站格式。
+    // 失败不影响这次登录 —— 旧哈希照样能用，下次登录再换。
+    if (needsRehash(user.passwordHash)) {
+      try {
+        await db
+          .update(users)
+          .set({ passwordHash: await hashPassword(password), passwordAlgo: 'scrypt', updatedAt: new Date() })
+          .where(eq(users.id, user.id));
+      } catch (err) {
+        request.log.warn({ err, userId: user.id }, '旧密码哈希升级失败');
+      }
+    }
 
     if (user.status !== 'active') {
       throw forbidden('账号已被停用，请联系站点管理员');

@@ -64,7 +64,7 @@ export type LabelPlusBuild = {
   files: ExportFileRef[];
 };
 
-type TranslationRow = {
+export type TranslationRow = {
   sourceId: string;
   content: string;
   proofreadContent: string;
@@ -75,11 +75,17 @@ type TranslationRow = {
  * 挑出这一条标号该嵌的字。没有译文时返回空串（而不是 null）——
  * 调用方拿到的永远是字符串，少一层空值分支，也就少一处漏判。
  *
- * 顺序：**有校对稿的 → 被选中的 → 最后一份候选**。
+ * 顺序：**被选中且有校对稿的 → 任一有校对稿的 → 被选中的 → 最后一份候选**。
+ * 第一步是后加的：候选查询没有 ORDER BY，同一条标号上有两份校对稿时，
+ * 只按「任一有校对稿」挑，结果取决于行的物理顺序 —— 同一份数据两次导出可能不一样。
+ * 被选中的那份校对稿永远优先，导出才是确定的（迁移核对也按这个口径逐条比）。
  * 最后那步是为脏数据准备的兜底：正常情况下保存译文时会自动选中第一份
  * （见 routes/translations.ts），所以几乎不会走到。
  */
-function pickTranslation(rows: TranslationRow[]): string {
+export function pickTranslation(rows: readonly Omit<TranslationRow, 'sourceId'>[]): string {
+  const selectedProofed = rows.find((r) => r.isSelected && r.proofreadContent.trim() !== '');
+  if (selectedProofed) return selectedProofed.proofreadContent;
+
   const proofed = rows.find((r) => r.proofreadContent.trim() !== '');
   if (proofed) return proofed.proofreadContent;
 

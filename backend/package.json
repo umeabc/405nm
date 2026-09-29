@@ -16,7 +16,9 @@
     "seed": "tsx src/seed.ts",
     "seed:dist": "node dist/seed.js",
     "cli": "tsx src/cli/admin.ts",
-    "cli:dist": "node dist/cli/admin.js"
+    "cli:dist": "node dist/cli/admin.js",
+    "migrate-moeflow": "tsx src/cli/migrate-moeflow.ts",
+    "migrate-moeflow:dist": "node dist/cli/migrate-moeflow.js"
   },
   "dependencies": {
     "@405nm/shared": "^0.1.0",

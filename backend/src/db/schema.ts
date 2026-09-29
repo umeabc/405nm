@@ -34,9 +34,15 @@ export const users = pgTable(
       .primaryKey()
       .default(sql`gen_random_uuid()`),
     username: text('username').notNull().unique(),
+    /**
+     * 可选的登录邮箱（一律存小写）。本站注册不收邮箱；这一列是给从 moeflow
+     * 迁来的账号用的 —— 那边**用邮箱登录**，迁过来后用户名可能被规整过，
+     * 不能指望他们记得新用户名。
+     */
+    email: text('email').unique(),
     displayName: text('display_name').notNull(),
     passwordHash: text('password_hash').notNull(),
-    /** 预留算法升级位：今天是 scrypt，将来可平滑换 argon2id。 */
+    /** scrypt = 本站格式；werkzeug-* = 迁移来的旧哈希，首次登录成功后换成 scrypt。 */
     passwordAlgo: text('password_algo').notNull().default('scrypt'),
     avatarKey: text('avatar_key'),
     isSiteAdmin: boolean('is_site_admin').notNull().default(false),

@@ -64,6 +64,13 @@
       "when": 1790648396199,
       "tag": "0008_groovy_darkhawk",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790656146744,
+      "tag": "0009_legal_zeigeist",
+      "breakpoints": true
     }
   ]
 }

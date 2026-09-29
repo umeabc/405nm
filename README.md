@@ -13,7 +13,7 @@
 | M4 | 图源采集：7 类图源解析、持久化导入任务（可续跑）、多份具名凭据 | ✅ |
 | M5 | 导出（原图 + LabelPlus txt / 工程包 / 成品包）与成品回传、状态推进到已嵌字 | ✅ |
 | M6 | 发布：B 站适配器、Postgres 队列（原子认领 + 幂等键 + 租约 + 两阶段标记）、账号库与署名、一键生成草稿与定时发布 | ✅（真实发布待人工验一次） |
-| M7 | 从旧站迁移（含图片与署名台账） | 未开始 |
+| M7 | 从旧站迁移（含图片与署名台账）：只读导出快照、盘点 / 迁移 / 核验三条命令、逐行逐字段的无损报告 | ✅（真机演练通过，正式切换另约窗口） |
 | M8 | AI 机翻（OCR + 自动标号 + 大模型回填） | 未开始 |
 
 ## 技术栈
@@ -194,6 +194,23 @@ X handle 不在账号库中，因此不会被误判成 B 站用户。正则**含
 账号库里 `platform_uid` 为空的成员，只当文字用、不进 mentions ——
 进了也点不动，不如老实不填。
 
+## 迁移（彩翻 → 405nm）
+
+三条命令，操作手册见 `docs/m7-migration.md`：
+
+```bash
+./deploy/moeflow-export.sh <输出目录> [mongo 容器名]      # 只读导出旧库快照
+node backend/dist/cli/migrate-moeflow.js inventory --export <目录>   # 只算不写：先看清单与有损点
+node backend/dist/cli/migrate-moeflow.js migrate  --export <目录> --images-dir <旧存储>   # 写库 + 就地核验
+node backend/dist/cli/migrate-moeflow.js verify   --export <目录>    # 只核验
+```
+
+三件必须知道的事：
+
+- **ID 由旧库 ObjectId 派生**（`uuidv5`），所以重跑幂等、可续跑，不依赖映射表；写库只增不改。
+- **核验不是自己跟自己比**：它用同一份计划重算一遍期望值，再与库里的行**逐字段**比，图片还会把字节重新读一遍算摘要。
+- **报告里认不出的东西一律判失败**：导出里出现没登记去向的集合、行数与 manifest 不符、邀请码与站内撞码 —— 都不允许「悄悄过去」。
+
 ## 部署拓扑
 
 四个容器，与彩翻一致：
@@ -252,7 +269,7 @@ docker compose -f deploy/docker-compose.yml run --rm \
   -e M3_ADMIN_PASSWORD=... backend node /repo/tests/m3-verify.mjs
 ```
 
-`tests/` 下七个脚本：
+`tests/` 下八个脚本：
 
 | 脚本 | 覆盖 |
 |---|---|
@@ -262,6 +279,7 @@ docker compose -f deploy/docker-compose.yml run --rm \
 | `m4-verify.mjs` | 抓取客户端（浏览器指纹 JA4 回归护栏、失败分类、代理）+ 七类解析器 + 导入任务。加 `-e M4_LIVE=1` 才会真的出网 |
 | `m5-verify.mjs` | 导出体检 / LabelPlus txt 的逐字节格式 / 工程包与成品包（解包校验条目名与 txt 一致）/ 成品版本与删除 / 跨作品越权 / 状态机进 `typeset` 的前置条件 |
 | `m6-verify.mjs` | 正文渲染与署名片段 / @ 提及（含日文假名、含大小写不敏感）/ 发布账号与掩码 / 账号库 / 草稿与幂等键 / **队列语义**（原子认领、租约回收、两阶段标记 → `needs_review`、人工处置）/ 权限矩阵 |
+| `m7-verify.mjs` | 迁移：纯函数映射（uuidv5 / 权限码 / 署名拆分 / 坐标包围盒 / 进度推定 / 用户名规整 / 译文候选挑选）+ **一份自造的旧库快照**走完盘点→迁移→核验，并验证**幂等**（重跑零写入）与**核验确实会失败**（删行、改字段都判失败，重跑能补回）+ 迁来的账号能用原密码登录并升级哈希 |
 | `shared-verify.mjs` | 排版算法 + LabelPlus 往返（纯函数，`npm run test:shared` 本机可跑） |
 
 每个脚本都会打印「通过 N 项」并**在失败时以非零码退出**，脚本自带数据搭建、可反复执行，跑完留下的数据可当联调样本。造图用 `tests/lib/png.mjs` 里的最小 PNG 编码器（零依赖，共用一份）。
