@@ -114,8 +114,20 @@ export async function runMigration(options: MigrateOptions): Promise<Report> {
 async function finish(report: Report, reportPath: string): Promise<Report> {
   report.finishedAt = new Date().toISOString();
   const payload = JSON.stringify(report.toJSON(), null, 2);
-  await fs.mkdir(path.dirname(reportPath), { recursive: true });
-  await fs.writeFile(reportPath, payload, 'utf8');
+  let target = reportPath;
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  try {
+    await fs.writeFile(target, payload, 'utf8');
+  } catch (err) {
+    // 快照目录**通常是以只读方式挂进来的**（那是我们自己的建议），默认报告路径就落在它里面。
+    // 写不进去不该让整趟迁移白跑 —— 退到当前目录再试一次，并说明写到了哪儿。
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'EROFS' && code !== 'EACCES' && code !== 'EPERM') throw err;
+    target = path.resolve('migrate-report.json');
+    await fs.writeFile(target, payload, 'utf8');
+    console.warn(`[migrate] 报告目录只读，改写到 ${target}`);
+  }
+  reportPath = target;
   const result = report.toJSON().result;
   console.log(`\n[migrate] 结论：${result}`);
   console.log(`[migrate] 报告已写入 ${reportPath}`);
