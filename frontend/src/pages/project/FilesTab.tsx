@@ -6,6 +6,7 @@ import {
   LinkOutlined,
   PictureOutlined,
   ReadOutlined,
+  SendOutlined,
   SwapOutlined,
   UploadOutlined,
 } from '@ant-design/icons';
@@ -34,6 +35,7 @@ import { ExportModal } from '../../components/ExportModal';
 import { FileMoveModal } from '../../components/FileMoveModal';
 import { ImportModal } from '../../components/ImportModal';
 import { OutputModal } from '../../components/OutputModal';
+import { PublishModal } from '../../components/PublishModal';
 import { UploadModal } from '../../components/UploadModal';
 import { useClientConfig } from '../../hooks/useClientConfig';
 import { palette } from '../../theme';
@@ -91,6 +93,7 @@ export function FilesTab({
 
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   /** 正在看哪张图的成品。null = 弹窗关着。 */
   const [outputTarget, setOutputTarget] = useState<ProjectFileRow | null>(null);
 
@@ -204,6 +207,16 @@ export function FilesTab({
               onClick={() => setExporting(true)}
             >
               导出嵌字包
+            </Button>
+          ) : null}
+          {can('publish.create') ? (
+            <Button
+              size="small"
+              icon={<SendOutlined />}
+              disabled={files.length === 0}
+              onClick={() => setPublishing(true)}
+            >
+              发布到 B 站
             </Button>
           ) : null}
           <Input.Search
@@ -497,6 +510,12 @@ export function FilesTab({
         open={exporting}
         projectId={projectId}
         onClose={() => setExporting(false)}
+      />
+
+      <PublishModal
+        open={publishing}
+        projectId={projectId}
+        onClose={() => setPublishing(false)}
       />
 
       <OutputModal

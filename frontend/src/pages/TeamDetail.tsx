@@ -45,6 +45,7 @@ import { PageHeader } from '../components/AppShell';
 import { PermissionPicker, groupPermissions } from '../components/PermissionPicker';
 import { useAuth } from '../auth/AuthContext';
 import { palette } from '../theme';
+import { PublishTab } from './team/PublishTab';
 import { TeamProjectsTab } from './team/ProjectsTab';
 
 export default function TeamDetailPage() {
@@ -162,6 +163,13 @@ export default function TeamDetailPage() {
             key: 'projects',
             label: '作品',
             children: <TeamProjectsTab teamId={teamId} can={can} />,
+          },
+          {
+            // 发布账号与队列是**团队级**的事实（账号归团队、队列按团队看），
+            // 所以放这里而不是作品页
+            key: 'publish',
+            label: '发布',
+            children: <PublishTab teamId={teamId} />,
           },
           {
             key: 'roles',

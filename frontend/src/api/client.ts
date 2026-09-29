@@ -1191,3 +1191,145 @@ export const adminApi = {
       projectCount: number;
     }>('/admin/storage-usage'),
 };
+
+// ── 发布 ────────────────────────────────────────────────────
+
+export type PublishAccountRow = {
+  id: string;
+  platform: string;
+  label: string;
+  platformName: string;
+  platformUid: string;
+  avatarUrl: string;
+  enabled: boolean;
+  cookieStatus: 'ok' | 'expired' | 'unknown' | string;
+  cookieCheckedAt: string | null;
+  cookieMessage: string;
+  /** 掩码后的凭据，例如 { sessdata: '••••ab12' } */
+  credentials: Record<string, string>;
+  hasCredentials: boolean;
+};
+
+export type PublishJobRow = {
+  id: string;
+  projectId: string | null;
+  language: string;
+  accountId: string | null;
+  kind: string;
+  title: string;
+  text: string;
+  topic: { id: string | number; name: string } | null;
+  mentions: Array<{ name: string; uid: string }>;
+  slots: Record<string, { name?: string; handle?: string; uid?: string } | undefined>;
+  images: Array<{ key: string; name: string; width: number; height: number }>;
+  status: string;
+  scheduledAt: string | null;
+  attempts: number;
+  maxAttempts: number;
+  lastError: string;
+  publishedAt: string | null;
+  externalUrl: string;
+  createdAt: string;
+};
+
+export type PublishPrepare = {
+  languages: Array<{ language: string; label: string; count: number }>;
+  accounts: PublishAccountRow[];
+  templates: Array<{ id: string; name: string; content: string; maxImages: number; variables: Array<{ key: string; label: string; type: string; placeholder: string }> }>;
+  slots: Record<string, { name?: string; handle?: string; uid?: string } | undefined>;
+  slotLabels: Record<string, string>;
+  kinds: string[];
+  filesTotal: number;
+  filesNotReady: number;
+  canPublish: boolean;
+};
+
+export const publishApi = {
+  platforms: () => apiRequest<{ platforms: Array<{ id: string; label: string }> }>('/publish/platforms'),
+
+  // ── 发布账号（团队域）──
+  accounts: (teamId: string) =>
+    apiRequest<{ accounts: PublishAccountRow[] }>(`/teams/${teamId}/publish/accounts`),
+
+  createAccount: (teamId: string, body: { platform: string; label: string; sessdata: string; biliJct: string }) =>
+    apiRequest<{ account: PublishAccountRow; verified: boolean; warning?: string }>(
+      `/teams/${teamId}/publish/accounts`,
+      { method: 'POST', body },
+    ),
+
+  /** 换凭据。**后端会先向平台校验，通不过就拒绝覆盖**。 */
+  saveCredentials: (teamId: string, accountId: string, body: { sessdata: string; biliJct: string }) =>
+    apiRequest<{ account: PublishAccountRow; profile: { uid: string; name: string } }>(
+      `/teams/${teamId}/publish/accounts/${accountId}/credentials`,
+      { method: 'PUT', body },
+    ),
+
+  verifyAccount: (teamId: string, accountId: string) =>
+    apiRequest<{ ok: boolean; account: PublishAccountRow | null; error?: string }>(
+      `/teams/${teamId}/publish/accounts/${accountId}/verify`,
+      { method: 'POST', body: {} },
+    ),
+
+  updateAccount: (teamId: string, accountId: string, body: { label?: string; enabled?: boolean }) =>
+    apiRequest<{ account: PublishAccountRow | null }>(`/teams/${teamId}/publish/accounts/${accountId}`, {
+      method: 'PATCH',
+      body,
+    }),
+
+  removeAccount: (teamId: string, accountId: string) =>
+    apiRequest<{ ok: true }>(`/teams/${teamId}/publish/accounts/${accountId}`, { method: 'DELETE' }),
+
+  // ── 账号库 ──
+  credits: (teamId: string) =>
+    apiRequest<{ entries: Array<{ id: string; name: string; handle: string; platformUid: string; status: string; note: string; mentionable: boolean }> }>(
+      `/teams/${teamId}/publish/credits`,
+    ),
+
+  createCredit: (teamId: string, body: { name: string; handle: string; platformUid?: string; note?: string }) =>
+    apiRequest<{ entry: { id: string } }>(`/teams/${teamId}/publish/credits`, { method: 'POST', body }),
+
+  updateCredit: (teamId: string, entryId: string, body: Record<string, unknown>) =>
+    apiRequest<{ entry: { id: string } }>(`/teams/${teamId}/publish/credits/${entryId}`, { method: 'PATCH', body }),
+
+  removeCredit: (teamId: string, entryId: string) =>
+    apiRequest<{ ok: true }>(`/teams/${teamId}/publish/credits/${entryId}`, { method: 'DELETE' }),
+
+  // ── 模板 ──
+  templates: (teamId: string) =>
+    apiRequest<{ templates: Array<{ id: string; name: string; content: string; maxImages: number }> }>(
+      `/teams/${teamId}/publish/templates`,
+    ),
+
+  // ── 草稿与队列 ──
+  prepare: (projectId: string, kind: string) =>
+    apiRequest<PublishPrepare>(`/projects/${projectId}/publish/prepare?kind=${encodeURIComponent(kind)}`),
+
+  createDraft: (projectId: string, body: Record<string, unknown>) =>
+    apiRequest<{ job: PublishJobRow; reused: boolean }>(`/projects/${projectId}/publish/drafts`, {
+      method: 'POST',
+      body,
+    }),
+
+  projectJobs: (projectId: string) => apiRequest<{ jobs: PublishJobRow[] }>(`/projects/${projectId}/publish/jobs`),
+
+  teamJobs: (teamId: string, status?: string) =>
+    apiRequest<{ jobs: PublishJobRow[] }>(
+      `/teams/${teamId}/publish/jobs${status ? `?status=${encodeURIComponent(status)}` : ''}`,
+    ),
+
+  schedule: (jobId: string, scheduledAt: string | null) =>
+    apiRequest<{ job: PublishJobRow }>(`/publish/jobs/${jobId}/schedule`, {
+      method: 'POST',
+      body: { scheduledAt },
+    }),
+
+  cancel: (jobId: string) =>
+    apiRequest<{ job: PublishJobRow }>(`/publish/jobs/${jobId}/cancel`, { method: 'POST', body: {} }),
+
+  /** 处置「不确定发出去了没有」的任务。 */
+  resolve: (jobId: string, outcome: 'confirmed' | 'notPublished', externalUrl = '') =>
+    apiRequest<{ job: PublishJobRow }>(`/publish/jobs/${jobId}/resolve`, {
+      method: 'POST',
+      body: { outcome, externalUrl },
+    }),
+};
