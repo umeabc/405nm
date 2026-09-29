@@ -193,6 +193,29 @@ record(
   JSON.stringify(roles.map((r) => r.systemCode)),
 );
 
+// ── 角色权限的「代码声明」与「建作品时实际落库」必须一致 ──────
+//
+// 这一条盯的是 `project-roles.ts` 里那类「两处各写一遍、慢慢分叉」的问题：
+// 曾经 `ensureProjectRoleTemplates` **只插行、不补权限**，于是在某个权限
+// 被加进代码之前建过模板的团队，连它之后**新建的作品**都缺那个权限 ——
+// 症状是功能上线了、用户一点却报「需要 file.typeset」，界面上看不出哪里错了。
+//
+// 直接 import 编译产物里的模板声明来比，而不是把期望值抄一份到测试里：
+// 抄一份的话，改了代码忘了改测试，这条断言就成了摆设。
+const { PROJECT_ROLE_TEMPLATES } = await import('../backend/dist/domain/project-roles.js');
+
+for (const tpl of PROJECT_ROLE_TEMPLATES) {
+  const actual = roles.find((r) => r.systemCode === tpl.systemCode);
+  const expected = [...tpl.permissions].sort();
+  const got = [...(actual?.permissions ?? [])].sort();
+  record(
+    '角色权限',
+    `新作品的「${tpl.name}」权限与代码声明逐项一致`,
+    JSON.stringify(got) === JSON.stringify(expected),
+    `实际 ${JSON.stringify(got)} / 期望 ${JSON.stringify(expected)}`,
+  );
+}
+
 // ⚠️ 这个接口收的是 userId + projectRoleId（不是 username + roleId）。
 // 第一次跑的时候字段名写错了，请求被校验拒掉、而我没看返回码 —— 于是
 // 「嵌字角色可以回传成品」的断言以 403 的面目失败，看起来像权限配错了。

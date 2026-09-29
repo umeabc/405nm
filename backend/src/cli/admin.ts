@@ -5,6 +5,8 @@
  *   npm run cli -w backend -- set 用户名
  *   npm run cli -w backend -- unset 用户名
  *   npm run cli -w backend -- passwd 用户名 [新密码]
+ *   npm run cli -w backend -- sync-roles          列出全部团队并补默认权限
+ *   npm run cli -w backend -- sync-roles 团队名    只补这一个团队
  *
  * 容器里：
  *   docker compose -f deploy/docker-compose.yml run --rm backend node backend/dist/cli/admin.js list
@@ -12,10 +14,11 @@
  * 子命令与输出文案对标图译空间的 scripts/admin.mjs。与它的一处差别：
  * 它直接开 SQLite 文件，这里走正常的数据库连接（Postgres 没有「一个文件」可开）。
  */
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, inArray } from 'drizzle-orm';
 import { hashPassword } from '../auth/password.js';
 import { closeDb, db } from '../db/client.js';
-import { users } from '../db/schema.js';
+import { projects, teams, users } from '../db/schema.js';
+import { syncProjectRoleDefaults, syncProjectRoleTemplateDefaults } from '../domain/project-roles.js';
 
 const PASSWORD_ALPHABET = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -35,8 +38,12 @@ function printUsage(): void {
   set <用户名>             授予站点管理员
   unset <用户名>           收回站点管理员
   passwd <用户名> [新密码]  重置密码（不填新密码则随机生成并打印）
+  sync-roles [团队名]      把代码里的项目角色默认权限**只增不减**地补齐
+                           （不填团队名则全部团队）
 
-说明：站点管理员也可以用网页后台完成上述操作，这个 CLI 是「进不去后台」时的兜底。`);
+说明：站点管理员也可以用网页后台完成上述操作，这个 CLI 是「进不去后台」时的兜底。
+      sync-roles 是给「代码里加了新权限、老团队用不上」这种情况的运维入口 ——
+      它同时补团队模板与团队下所有已有作品的角色。`);
 }
 
 function formatTime(value: Date | null): string {
@@ -141,6 +148,74 @@ async function commandPasswd(username: string, newPassword?: string): Promise<nu
   return 0;
 }
 
+/**
+ * 补齐项目角色的默认权限。
+ *
+ * 为什么需要这个入口：作品的系统角色是建作品时从团队模板**复制**的快照，
+ * 而团队模板又只在第一次用到时按当时的代码建一次。「代码里加了新权限」
+ * 之后，老团队会一直缺那个权限 —— 症状是功能上线了，用户一点就报
+ * 「需要 xxx」，界面上却看不出哪里配错了。
+ *
+ * 两处都补，因为它们各自独立地会漂移：
+ *   1. **团队模板** —— 不补的话，该团队**以后新建的作品**照样缺；
+ *   2. **每个已有作品的角色** —— 不补的话，现有作品立刻就是坏的。
+ *
+ * 语义**只增不减**（与 `syncProjectRoleDefaults` 一致）：手工加过的保留，
+ * 只补缺的。想真正减掉某个权限，请建自定义角色 —— 那条路径不在这里，
+ * 永远不会被这个命令碰到。
+ */
+async function commandSyncRoles(teamName?: string): Promise<number> {
+  const teamRows = teamName
+    ? await db.select({ id: teams.id, name: teams.name }).from(teams).where(eq(teams.name, teamName))
+    : await db.select({ id: teams.id, name: teams.name }).from(teams).orderBy(asc(teams.name));
+
+  if (teamRows.length === 0) {
+    console.error(`[错误] 没有找到团队${teamName ? `「${teamName}」` : ''}。`);
+    return 1;
+  }
+
+  let totalAdded = 0;
+
+  for (const team of teamRows) {
+    console.log(`\n团队：${team.name}`);
+
+    const templateReport = await syncProjectRoleTemplateDefaults(team.id);
+    if (templateReport.length === 0) {
+      console.log('  · 团队模板：已是最新');
+    } else {
+      for (const item of templateReport) {
+        console.log(`  · 团队模板「${item.role}」补了 ${item.added.length} 项：${item.added.join('、')}`);
+        totalAdded += item.added.length;
+      }
+    }
+
+    const projectRows = await db
+      .select({ id: projects.id, name: projects.name })
+      .from(projects)
+      .where(eq(projects.teamId, team.id))
+      .orderBy(asc(projects.serial));
+
+    if (projectRows.length === 0) {
+      console.log('  · 该团队还没有作品');
+      continue;
+    }
+
+    let touchedProjects = 0;
+    for (const project of projectRows) {
+      const report = await syncProjectRoleDefaults(project.id);
+      if (report.length === 0) continue;
+      touchedProjects += 1;
+      const detail = report.map((r) => `${r.role}+${r.added.length}`).join('、');
+      console.log(`  · 作品「${project.name}」：${detail}`);
+      totalAdded += report.reduce((sum, r) => sum + r.added.length, 0);
+    }
+    if (touchedProjects === 0) console.log(`  · ${projectRows.length} 个作品的角色都已是最新`);
+  }
+
+  console.log(`\n[完成] 共补 ${totalAdded} 项权限。`);
+  return 0;
+}
+
 async function main(): Promise<void> {
   const [command, username, newPassword] = process.argv.slice(2);
 
@@ -163,6 +238,11 @@ async function main(): Promise<void> {
         return;
       }
       process.exitCode = await commandSet(username, command === 'set');
+      return;
+    }
+
+    case 'sync-roles': {
+      process.exitCode = await commandSyncRoles(username);
       return;
     }
 

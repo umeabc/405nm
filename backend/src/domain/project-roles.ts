@@ -107,14 +107,32 @@ export function projectTemplateByCode(code: string): ProjectRoleTemplate | undef
   return PROJECT_ROLE_TEMPLATES.find((t) => t.systemCode === code);
 }
 
+export type RoleSyncReport = Array<{ role: string; added: string[] }>;
+
 /**
- * 补齐某团队的「项目角色模板」。
+ * 补齐某团队的「项目角色模板」，并把缺失的默认权限**只增不减**地补上。
  *
  * 幂等，且**不必写数据迁移**：M1 建的团队没有这些模板行，
  * 这里在「建作品时」顺手补齐即可 —— 老团队一建作品就自动补上，
  * 没建过作品的团队也不需要这些行。比写一段一次性回填脚本更不容易出错。
+ *
+ * ⚠️ **「已存在就跳过」是错的，这一条踩过坑。**
+ * 早先的写法是 `if (byCode.has(tpl.systemCode)) continue;` —— 只补行、不补权限。
+ * 而 `instantiateProjectRoles()` 是从**模板行的实际权限**复制的，于是在
+ * 「某个权限被加进代码之前」建过模板的团队，它的模板永远缺那个权限，
+ * **连它之后新建的作品也一样缺**。症状是：功能上线了，那个团队的用户
+ * 一点就报「需要 file.typeset」，而在界面上看不出任何配错的地方。
+ *
+ * 语义与 `syncProjectRoleDefaults` 保持一致（同样只增不减）：
+ *  - **只加不减**。管理员手工加过的权限保留，不做「恢复出厂设置」；
+ *    **想减权限就建自定义角色** —— 自定义角色不在这条路径上，永远不会被碰；
+ *  - 只碰系统角色（有 `systemCode` 的），自定义角色一律不动；
+ *  - 返回实际新增了什么，界面上可以据此提示「补了 3 项」。
  */
-export async function ensureProjectRoleTemplates(teamId: string, tx: DbLike = db): Promise<Map<string, string>> {
+async function syncTemplateRows(
+  teamId: string,
+  tx: DbLike,
+): Promise<{ ids: Map<string, string>; added: RoleSyncReport }> {
   const existing = await tx
     .select({ id: roles.id, systemCode: roles.systemCode })
     .from(roles)
@@ -125,49 +143,93 @@ export async function ensureProjectRoleTemplates(teamId: string, tx: DbLike = db
     if (row.systemCode) byCode.set(row.systemCode, row.id);
   }
 
-  for (const tpl of PROJECT_ROLE_TEMPLATES) {
-    if (byCode.has(tpl.systemCode)) continue;
+  // 现有权限一次查完。逐个角色查一次就是 N+1，而这里每次建作品都要跑。
+  const currentPerms = existing.length
+    ? await tx
+        .select({ roleId: rolePermissions.roleId, code: rolePermissions.permissionCode })
+        .from(rolePermissions)
+        .where(
+          inArray(
+            rolePermissions.roleId,
+            existing.map((r) => r.id),
+          ),
+        )
+    : [];
 
-    const inserted = await tx
-      .insert(roles)
-      .values({
-        scope: 'project',
-        teamId,
-        name: tpl.name,
-        level: tpl.level,
-        intro: tpl.intro,
-        isSystem: true,
-        systemCode: tpl.systemCode,
-        // 模板本身不参与「自动成为项目管理员」的判定
-        autoProjectAdmin: false,
-      })
-      .onConflictDoNothing()
-      .returning({ id: roles.id });
-
-    let roleId = inserted[0]?.id;
-    if (!roleId) {
-      // 撞上 (scope, teamId, name) 唯一键：说明同名行已存在（可能是手工建的），
-      // 查回来复用，避免整段失败。
-      const found = await tx
-        .select({ id: roles.id })
-        .from(roles)
-        .where(and(eq(roles.scope, 'project'), eq(roles.teamId, teamId), eq(roles.name, tpl.name)))
-        .limit(1);
-      roleId = found[0]?.id;
-      if (!roleId) throw new Error(`补齐项目角色模板失败：${tpl.systemCode}`);
-    }
-
-    if (tpl.permissions.length > 0) {
-      await tx
-        .insert(rolePermissions)
-        .values(tpl.permissions.map((code) => ({ roleId: roleId!, permissionCode: code })))
-        .onConflictDoNothing();
-    }
-
-    byCode.set(tpl.systemCode, roleId);
+  const haveByRole = new Map<string, Set<string>>();
+  for (const row of currentPerms) {
+    const set = haveByRole.get(row.roleId) ?? new Set<string>();
+    set.add(row.code);
+    haveByRole.set(row.roleId, set);
   }
 
-  return byCode;
+  const added: RoleSyncReport = [];
+
+  for (const tpl of PROJECT_ROLE_TEMPLATES) {
+    let roleId = byCode.get(tpl.systemCode);
+
+    if (!roleId) {
+      const inserted = await tx
+        .insert(roles)
+        .values({
+          scope: 'project',
+          teamId,
+          name: tpl.name,
+          level: tpl.level,
+          intro: tpl.intro,
+          isSystem: true,
+          systemCode: tpl.systemCode,
+          // 模板本身不参与「自动成为项目管理员」的判定
+          autoProjectAdmin: false,
+        })
+        .onConflictDoNothing()
+        .returning({ id: roles.id });
+
+      roleId = inserted[0]?.id;
+      if (!roleId) {
+        // 撞上 (scope, teamId, name) 唯一键：说明同名行已存在（可能是手工建的），
+        // 查回来复用，避免整段失败。
+        const found = await tx
+          .select({ id: roles.id })
+          .from(roles)
+          .where(and(eq(roles.scope, 'project'), eq(roles.teamId, teamId), eq(roles.name, tpl.name)))
+          .limit(1);
+        roleId = found[0]?.id;
+        if (!roleId) throw new Error(`补齐项目角色模板失败：${tpl.systemCode}`);
+      }
+      byCode.set(tpl.systemCode, roleId);
+    }
+
+    // 新建的角色这里 have 为空集，于是「补齐」这一步顺带把初始权限也写了 ——
+    // 一份逻辑同时覆盖「新建」与「补旧」，不会像早先那样两处各写一遍而慢慢分叉。
+    const have = haveByRole.get(roleId) ?? new Set<string>();
+    const missing = tpl.permissions.filter((code) => !have.has(code));
+    if (missing.length === 0) continue;
+
+    await tx
+      .insert(rolePermissions)
+      .values(missing.map((code) => ({ roleId: roleId!, permissionCode: code })))
+      .onConflictDoNothing();
+
+    added.push({ role: tpl.name, added: missing });
+  }
+
+  return { ids: byCode, added };
+}
+
+export async function ensureProjectRoleTemplates(
+  teamId: string,
+  tx: DbLike = db,
+): Promise<Map<string, string>> {
+  return (await syncTemplateRows(teamId, tx)).ids;
+}
+
+/** 只做同步、不要 id 的入口（CLI 与后台用）。返回补了什么。 */
+export async function syncProjectRoleTemplateDefaults(
+  teamId: string,
+  tx: DbLike = db,
+): Promise<RoleSyncReport> {
+  return (await syncTemplateRows(teamId, tx)).added;
 }
 
 /**
@@ -324,7 +386,7 @@ export async function listProjectRoleTemplates(teamId: string) {
 export async function syncProjectRoleDefaults(
   projectId: string,
   tx: DbLike = db,
-): Promise<Array<{ role: string; added: string[] }>> {
+): Promise<RoleSyncReport> {
   const roleRows = await tx
     .select()
     .from(projectRoles)
@@ -352,7 +414,7 @@ export async function syncProjectRoleDefaults(
     haveByRole.set(row.roleId, set);
   }
 
-  const report: Array<{ role: string; added: string[] }> = [];
+  const report: RoleSyncReport = [];
 
   for (const tpl of PROJECT_ROLE_TEMPLATES) {
     const role = bySystemCode.get(tpl.systemCode);

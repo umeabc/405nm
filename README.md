@@ -201,6 +201,32 @@ docker compose -f deploy/docker-compose.yml run --rm \
 
 `m4-verify.mjs` 不带 `M4_LIVE=1` 时只跑不碰网络的那部分（指纹与失败分类），拿不到出网报告时会**明确变红而不是跳过** —— 静默跳过等于给自己发一张假的通行证。
 
+## 角色权限：代码声明 vs 落库快照
+
+作品角色是建作品时从**团队模板**复制的一份快照，而团队模板又只在第一次用到时
+按当时的代码建一次。于是「代码里给某个默认角色加了新权限」之后，老团队会一直缺它 ——
+**连它以后新建的作品也一样缺**，症状是功能上线了、用户一点却报「需要 xxx」，
+界面上看不出哪里配错了。这是真实发生过的事：
+
+- M1 时期建的团队，模板是在项目域权限码**还不存在**时建的，几乎全空；
+- M2 时期的团队缺 M3 才加的 `tra.check`。
+
+处理方式与 `syncProjectRoleDefaults` 一致，**只增不减**：
+
+- `ensureProjectRoleTemplates()` 现在对**已存在**的模板也补齐缺失的默认权限
+  （早先是「已存在就跳过」，只补行不补权限 —— 那是这个 bug 的根因）；
+- 想真正**减掉**某个权限，请建**自定义角色**：只有系统角色会走这条同步路径，
+  自定义角色永远不会被碰。
+
+存量数据用一次运维命令补齐（同时补团队模板与该团队下所有已有作品）：
+
+```bash
+docker compose -f deploy/docker-compose.yml run --rm --entrypoint node   backend backend/dist/cli/admin.js sync-roles        # 全部团队
+docker compose -f deploy/docker-compose.yml run --rm --entrypoint node   backend backend/dist/cli/admin.js sync-roles 团队名  # 只补一个团队
+```
+
+命令是幂等的：没事可补时报「共补 0 项」。
+
 ## 注意
 
 - 生产环境**必须 HTTPS**：会话 Cookie 带 `Secure`，纯 HTTP 下登录不上。
