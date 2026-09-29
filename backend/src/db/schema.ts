@@ -855,7 +855,7 @@ export const sourcingAccounts = pgTable(
     source: text('source').notNull(),
     label: text('label').notNull(),
     /**
-     * 加密后的凭据 JSON（AES-256-GCM，见 sourcing/credentials.ts）。
+     * 加密后的凭据 JSON（AES-256-GCM，见 lib/credentials.ts）。
      * **明文绝不落这一列**，也不回传前端 —— API 只给掩码视图。
      */
     credentials: text('credentials').notNull().default(''),
@@ -975,3 +975,224 @@ export const importTaskItems = pgTable(
 export type SourcingAccount = typeof sourcingAccounts.$inferSelect;
 export type ImportTask = typeof importTasks.$inferSelect;
 export type ImportTaskItem = typeof importTaskItems.$inferSelect;
+
+// ── 发布 ────────────────────────────────────────────────────
+//
+// 五张表，对着「一键导出发布包 → 草稿 → 定时发布」这条链路的每一段：
+// `publish_accounts`（发到哪）→ `publish_jobs`（发什么、什么时候）
+// → `publish_attempts`（发到哪一步了）。`credit_directory` 与
+// `publish_templates` 是署名与正文的来源。
+//
+// 与旧实现（380nm）的三处结构差异，每一处都是**为了修一个已经在生产上
+// 造成过麻烦的缺陷**：
+//
+//  1. `publish_jobs` 有 **`idempotency_key` 唯一列** —— 旧实现没有，重复入队
+//     就重复发。顺带用它派生出确定性的 `upload_id`，让图片上传这一步可安全重试
+//     （旧实现每次 `crypto.randomBytes(16)`，重试等于换一张图重传）。
+//  2. `claimed_at` / `lease_expires_at` —— 旧实现靠进程内的 `_busy` 标志位，
+//     多实例部署直接重复发布。认领改成 `FOR UPDATE SKIP LOCKED` + 租约。
+//  3. **`status` 里有 `needs_review`** —— B 站的发布接口**没有幂等参数**，
+//     「HTTP 200 之后、写库之前崩掉」这个窗口消不掉。旧实现的 `recover()`
+//     把卡在 `publishing` 的任务直接改回 `pending` 重发，那是**静默重发**。
+//     这里改成：凡有 in-flight 的发布尝试，一律标 `needs_review` 交人工。
+
+export const publishAccounts = pgTable(
+  'publish_accounts',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    /** **归团队**（不是全站单例）：一个团队可以持有一个或多个发布号 */
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    platform: text('platform').notNull().default('bilibili'),
+    /** 给人看的名字，如「主号」「备用号」 */
+    label: text('label').notNull(),
+    /** 加密后的凭据 JSON（AES-256-GCM，见 lib/credentials.ts）。**绝不明文输出** */
+    credentials: text('credentials').notNull().default(''),
+    /** 校验通过后拿到的平台身份，展示用 */
+    platformUid: text('platform_uid').notNull().default(''),
+    platformName: text('platform_name').notNull().default(''),
+    avatarUrl: text('avatar_url').notNull().default(''),
+    enabled: boolean('enabled').notNull().default(true),
+    /** ok | expired | unknown —— 由定时巡检或手动校验写入 */
+    cookieStatus: text('cookie_status').notNull().default('unknown'),
+    cookieCheckedAt: timestamp('cookie_checked_at', { withTimezone: true }),
+    cookieMessage: text('cookie_message').notNull().default(''),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('publish_accounts_team_label_uq').on(t.teamId, t.label),
+    index('publish_accounts_team_idx').on(t.teamId, t.enabled),
+  ],
+);
+
+/**
+ * 账号库 —— 署名用的成员目录。
+ *
+ * `platform_uid` 是这张表存在的关键：**@ 要可点击，就必须拿到对方的平台 uid**
+ * （B 站的 type-2 节点靠 `biz_id` 定位用户）。只存一个 `@handle` 字符串的话，
+ * 发出去的动态里那个 @ 是死的。
+ */
+export const creditDirectory = pgTable(
+  'credit_directory',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    /** 显示名 */
+    name: text('name').notNull(),
+    /** @ 用的 handle，不含 `@` */
+    handle: text('handle').notNull(),
+    /** 平台 uid。空串表示「只当文字用，@ 不可点击」 */
+    platformUid: text('platform_uid').notNull().default(''),
+    /** active（在岗）| left（离岗）。离岗的仍保留，历史署名要能追溯 */
+    status: text('status').notNull().default('active'),
+    note: text('note').notNull().default(''),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    legacyId: text('legacy_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('credit_directory_team_handle_uq').on(t.teamId, t.handle),
+    index('credit_directory_team_idx').on(t.teamId, t.status),
+  ],
+);
+
+export const publishTemplates = pgTable(
+  'publish_templates',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    /** 正文模板，`{{变量}}`（正则含中文，见 publish/render.ts） */
+    content: text('content').notNull(),
+    maxImages: integer('max_images').notNull().default(9),
+    /** 变量声明的快照 `[{key,label,type,placeholder}]`，供界面渲染表单 */
+    variables: jsonb('variables').notNull().default([]),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex('publish_templates_team_name_uq').on(t.teamId, t.name)],
+);
+
+export const publishJobs = pgTable(
+  'publish_jobs',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    teamId: uuid('team_id')
+      .notNull()
+      .references(() => teams.id, { onDelete: 'cascade' }),
+    projectId: uuid('project_id').references(() => projects.id, { onDelete: 'set null' }),
+    /** 取的是哪个语言的成品。语言码文本，理由同 outputs */
+    language: text('language').notNull().default(''),
+    accountId: uuid('account_id').references(() => publishAccounts.id, { onDelete: 'set null' }),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+
+    /**
+     * 幂等键。唯一。作用是挡住「重复入队」，并派生确定性的 upload_id。
+     * 它**挡不住**「HTTP 200 之后崩掉」那种重复 —— 那个窗口只能靠
+     * `publish_attempts` 的两阶段标记 + `needs_review` 兜。
+     */
+    idempotencyKey: text('idempotency_key').notNull().unique(),
+
+    /** 内容类型：翻嵌 | 翻译 | 转载 | 原创。决定署名槽位 */
+    kind: text('kind').notNull().default('原创'),
+    title: text('title').notNull().default(''),
+    /** 正文（已渲染模板；署名片段与提及在**发布时**兜底追加） */
+    text: text('text').notNull().default(''),
+    /** 绑定的话题 `{id,name}` */
+    topic: jsonb('topic'),
+    /** @ 提及 `[{name,uid}]`。发布时还会再兜底补一次 */
+    mentions: jsonb('mentions').notNull().default([]),
+    /**
+     * 署名槽位**快照** `{trans:{name,handle,uid}, typo:{…}, orig:{…}}`。
+     * 存快照而不是每次去目录里查：目录改名、有人离岗，都不该改变
+     * 一条**已经排好期**的动态的署名。
+     */
+    slots: jsonb('slots').notNull().default({}),
+    /** 图片**快照** `[{key,name,width,height}]`，同上：成品换版本不该影响已排期的任务 */
+    images: jsonb('images').notNull().default([]),
+
+    /** draft | pending | publishing | published | failed | needs_review | canceled */
+    status: text('status').notNull().default('draft'),
+    scheduledAt: timestamp('scheduled_at', { withTimezone: true }),
+    attempts: integer('attempts').notNull().default(0),
+    maxAttempts: integer('max_attempts').notNull().default(3),
+    lastError: text('last_error').notNull().default(''),
+
+    // 原子认领 + 租约（取代旧实现的进程内标志位）
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    externalId: text('external_id').notNull().default(''),
+    externalUrl: text('external_url').notNull().default(''),
+
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // 认领查询走这条：status + scheduled_at
+    index('publish_jobs_claim_idx').on(t.status, t.scheduledAt),
+    index('publish_jobs_team_idx').on(t.teamId, t.createdAt),
+    index('publish_jobs_project_idx').on(t.projectId),
+  ],
+);
+
+/**
+ * 发布尝试 —— **两阶段标记**的落点。
+ *
+ * 调 `createDynamic` **之前**先插一条 `phase='publish', status='in_flight'`；
+ * 拿到结果再改成 succeeded / failed。这样「发出去了但没来得及写库」的窗口
+ * 在库里留下一条 in_flight 记录：worker 重启时看到它就是**不确定**，
+ * 标 `needs_review` 交人工，**绝不自动重发**。
+ *
+ * 图片上传单独记一个 phase：它失败可以安全重试（最坏是平台上多几张没人引用的图），
+ * 而 `createDynamic` 失败**不能** —— 网络超时是歧义的，请求可能已经到达并发布成功。
+ */
+export const publishAttempts = pgTable(
+  'publish_attempts',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    jobId: uuid('job_id')
+      .notNull()
+      .references(() => publishJobs.id, { onDelete: 'cascade' }),
+    /** upload_images | publish */
+    phase: text('phase').notNull(),
+    /** in_flight | succeeded | failed */
+    status: text('status').notNull(),
+    /** 第几次尝试，与 publish_jobs.attempts 对齐，便于排查 */
+    attempt: integer('attempt').notNull().default(0),
+    detail: text('detail').notNull().default(''),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (t) => [
+    index('publish_attempts_job_idx').on(t.jobId, t.createdAt),
+    // 启动时扫「有没有悬空的发布尝试」走这条
+    index('publish_attempts_inflight_idx').on(t.status, t.phase),
+  ],
+);
+
+export type PublishAccount = typeof publishAccounts.$inferSelect;
+export type CreditDirectoryEntry = typeof creditDirectory.$inferSelect;
+export type PublishTemplate = typeof publishTemplates.$inferSelect;
+export type PublishJob = typeof publishJobs.$inferSelect;
+export type PublishAttempt = typeof publishAttempts.$inferSelect;

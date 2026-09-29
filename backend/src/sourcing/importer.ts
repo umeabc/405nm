@@ -4,7 +4,7 @@ import { importTaskItems, importTasks, sourcingAccounts } from '../db/schema.js'
 import { ingestImage } from '../domain/ingest-image.js';
 import { importFileName } from './filenames.js';
 import { env } from '../env.js';
-import { decryptCredentials } from './credentials.js';
+import { decryptCredentials } from '../lib/credentials.js';
 import { isSourcingError, SourcingError } from './errors.js';
 import { resolveProxy, sourcingFetch } from './http.js';
 import { renewImportLease } from './queue.js';

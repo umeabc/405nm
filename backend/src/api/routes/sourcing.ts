@@ -6,7 +6,7 @@ import { files, importTaskItems, importTasks, sourcingAccounts } from '../../db/
 import { requireProjectAccess, requireProjectPermission } from '../../domain/authorize.js';
 import { badRequest, notFound } from '../../lib/errors.js';
 import { logOp } from '../../lib/oplog.js';
-import { encryptCredentials, hasCredentials, maskCredentials } from '../../sourcing/credentials.js';
+import { encryptCredentials, hasCredentials, maskCredentials } from '../../lib/credentials.js';
 import { isSourcingError } from '../../sourcing/errors.js';
 import { maskProxy } from '../../sourcing/http.js';
 import { probeAccount } from '../../sourcing/probe.js';

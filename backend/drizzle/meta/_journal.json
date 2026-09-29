@@ -57,6 +57,13 @@
       "when": 1790625462090,
       "tag": "0007_bizarre_nighthawk",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790648396199,
+      "tag": "0008_groovy_darkhawk",
+      "breakpoints": true
     }
   ]
 }

@@ -47,6 +47,22 @@ const schema = z.object({
   /** sharp 全局并发上限。sharp 吃内存，不设限会 OOM —— 小内存机器上尤其致命。 */
   IMAGE_CONCURRENCY: z.coerce.number().int().positive().default(2),
 
+  // ── 发布 ──────────────────────────────────────────────────
+  /**
+   * 发布动作的超时（毫秒）。
+   *
+   * **刻意给得比较长**：B 站的发布接口没有幂等参数，超时对我们来说是**歧义**——
+   * 请求可能已经发出去并成功了。超时给短了会频繁制造「需要人工确认」的任务；
+   * 宁可多等一会儿拿到明确结果，也不要把不确定当常态。
+   */
+  PUBLISH_TIMEOUT_MS: z.coerce.number().int().positive().default(60000),
+  /** 任务被认领后的租约时长（分钟）。worker 崩了由下一个 tick 回收 */
+  PUBLISH_LEASE_MINUTES: z.coerce.number().int().positive().default(10),
+  /** 一个 tick 最多认领几条 */
+  PUBLISH_BATCH: z.coerce.number().int().positive().default(3),
+  /** Cookie 巡检间隔（分钟） */
+  PUBLISH_COOKIE_CHECK_MINUTES: z.coerce.number().int().positive().default(30),
+
   // ── 限流 ──────────────────────────────────────────────────
   // 注册要挡两件事：有人暴力猜邀请码，以及有人批量刷号。
   // 单 IP 与全站各一个窗口，全站那个是兜底，防止换 IP 绕过。

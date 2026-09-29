@@ -9,6 +9,7 @@ import { badRequest, notFound } from '../../lib/errors.js';
 import { mimeForExt } from '../../lib/mime.js';
 import { logOp } from '../../lib/oplog.js';
 import { storage, variantKey, type ImageVariant } from '../../storage/index.js';
+import { resolveLanguage } from '../../publish/compose.js';
 import { loadAccessibleFile } from '../file-access.js';
 import { clientIp, requireAuth } from '../guards.js';
 
@@ -39,29 +40,17 @@ function parse<T extends z.ZodTypeAny>(schema: T, value: unknown): z.infer<T> {
 /**
  * 定出这次回传算哪个语言的成品。
  *
- * 规则：**明确指定 > 作品只有一种目标语言时取它 > 空串（不限语言）**。
- * 指定了但不在作品的目标语言里时直接拒绝 —— 放任一个拼错的语言码写进去，
- * 会在成品表里留下一条谁也看不到、谁也删不掉的记录（成品包按语言过滤）。
+ * 规则与成品草稿（发布）走**同一份实现** —— 见 `publish/compose.ts` 的
+ * `resolveLanguage`。两处各写一遍的话，迟早一边改了另一边没改，
+ * 表现是「回传时算一个语言、生成草稿时又按另一个语言找」。
  */
-async function resolveLanguage(
-  projectId: string,
-  requested: string | undefined,
-): Promise<string> {
-  const rows = await db
-    .select({ language: targets.language })
-    .from(targets)
-    .where(eq(targets.projectId, projectId));
-
-  const codes = rows.map((r) => r.language);
-
-  if (requested !== undefined && requested !== '') {
-    if (codes.length > 0 && !codes.includes(requested)) {
-      throw badRequest(`「${requested}」不是本作品的目标语言`, 'UNKNOWN_LANGUAGE');
-    }
-    return requested;
+async function resolveLanguageForOutput(projectId: string, requested?: string): Promise<string> {
+  try {
+    return await resolveLanguage(projectId, requested);
+  } catch (err) {
+    // compose 里的版本不认识 HTTP 错误码，这里翻译一下
+    throw badRequest(err instanceof Error ? err.message : '语言不合法', 'UNKNOWN_LANGUAGE');
   }
-
-  return codes.length === 1 ? codes[0]! : '';
 }
 
 export async function registerOutputRoutes(app: FastifyInstance): Promise<void> {
@@ -116,7 +105,7 @@ export async function registerOutputRoutes(app: FastifyInstance): Promise<void> 
 
       if (buffer === null) throw badRequest('没有收到成品图文件', 'NO_FILE');
 
-      const language = await resolveLanguage(file.projectId, requestedLanguage);
+      const language = await resolveLanguageForOutput(file.projectId, requestedLanguage);
       const created = await createOutput({
         fileId,
         projectId: file.projectId,
